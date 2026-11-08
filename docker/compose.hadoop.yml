@@ -93,6 +93,17 @@ services:
       retries: 12
       start_period: 20s
 
+  # Submit-only client; run with `--profile spark`. Acts as the HDFS superuser (simple auth, local stack).
+  spark-client:
+    image: apache/spark:4.0.5-scala2.13-java17-python3-ubuntu@sha256:45eb1b8261a89bc7692be05aa4664676856f1c886cecc7b97b4e10f635b45b3c
+    profiles: [spark]
+    networks: [lakehouse]
+    environment:
+      HADOOP_CONF_DIR: /opt/hadoop-conf
+      HADOOP_USER_NAME: hadoop
+    volumes:
+      - ./hadoop/conf:/opt/hadoop-conf:ro
+
 networks:
   lakehouse:
 
