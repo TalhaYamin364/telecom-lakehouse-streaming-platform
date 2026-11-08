@@ -17,8 +17,8 @@ design decisions and pinned versions; issues and milestones are the phase plan.
 - Pin image and package versions; record them in `README.md`.
 - Comment only what the code can't show; keep comments to one short line.
 
-## Code review (applies to Copilot's reviewer and the `pr-reviewer` agent)
-This is a solo portfolio project, so review for real problems, not perfection.
+## Code review (applies to Copilot's reviewer and any other reviewer)
+This is a solo project, so review for real problems, not perfection.
 
 **Blocking** (must fix before merge):
 - Bugs, or a stack/job that won't start or rerun.

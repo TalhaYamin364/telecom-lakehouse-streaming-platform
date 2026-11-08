@@ -48,9 +48,8 @@ Pinned when the cluster is built (phase 1), with Apple Silicon (arm64) support c
   CI checks the PR title, which becomes the squash commit message.
 - **Pull requests:** the body says `Closes #<issue>`. Squash-merge only; the branch is
   deleted after merging.
-- **Review:** this is a solo project, so each PR gets an automated Copilot review, an
-  independent read-only reviewer agent (`.github/agents/pr-reviewer.agent.md`) and CI.
-  The author reads the review and merges.
+- **Review:** this is a solo project, so each PR gets an automated Copilot review and
+  CI checks. The author reads the review and merges.
 - **Releases:** when a phase milestone is fully closed, the release is tagged
   (`v0.1.0` after phase 1 through `v1.0.0` after phase 7).
 
