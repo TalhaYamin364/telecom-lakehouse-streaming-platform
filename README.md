@@ -40,6 +40,20 @@ each part is built; planned approach in italics.
 ## Versions
 Pinned when the cluster is built (phase 1), with Apple Silicon (arm64) support checked.
 
+## Development workflow
+- **Branches:** trunk-based. `main` is always working; work happens on short-lived
+  branches (`feat/`, `fix/`, `docs/`, `chore/`), one issue per branch. Direct pushes
+  to `main` are blocked.
+- **Commits and PR titles:** Conventional Commits (`feat: add HDFS and YARN compose file`).
+  CI checks the PR title, which becomes the squash commit message.
+- **Pull requests:** the body says `Closes #<issue>`. Squash-merge only; the branch is
+  deleted after merging.
+- **Review:** this is a solo project, so each PR gets an automated Copilot review, an
+  independent read-only reviewer agent (`.github/agents/pr-reviewer.agent.md`) and CI.
+  The author reads the review and merges.
+- **Releases:** when a phase milestone is fully closed, the release is tagged
+  (`v0.1.0` after phase 1 through `v1.0.0` after phase 7).
+
 ## Roadmap
 Progress is tracked in GitHub milestones and issues (one milestone per phase):
 Hadoop cluster, Kafka events, bronze layer, silver and gold, orchestration and
