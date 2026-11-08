@@ -1,4 +1,5 @@
-FROM eclipse-temurin:11-jre-jammy
+# Java 11.0.x on Ubuntu 22.04, pinned by digest; it already ships curl, tar and CA certificates.
+FROM eclipse-temurin:11-jre-jammy@sha256:0c567a8bd671331808b89a96976fabb305d57b123dec4fa62a20bfb89f2b32b9
 
 ARG HADOOP_VERSION=3.4.3
 ARG TARGETARCH
@@ -6,10 +7,6 @@ ARG TARGETARCH
 ENV HADOOP_HOME=/opt/hadoop \
     HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
 ENV PATH="${HADOOP_HOME}/bin:${PATH}"
-
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
- && rm -rf /var/lib/apt/lists/*
 
 # Apache ships a native arm64 tarball, so no emulation on Apple Silicon.
 RUN set -eux; \

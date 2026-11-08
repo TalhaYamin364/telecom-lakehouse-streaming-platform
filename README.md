@@ -36,6 +36,7 @@ docker compose -f docker/compose.hadoop.yml down   # add -v to also delete the H
 ```
 
 NameNode UI: http://localhost:9870. ResourceManager UI: http://localhost:8088.
+Both ports are published on loopback only, so they are not reachable from other machines.
 The NameNode formats HDFS only on first start, so restarts keep your data.
 
 ## Design questions
@@ -56,6 +57,7 @@ Pinned for a MacBook (Apple Silicon, arm64) running Docker Engine 28.1.1 and Com
 | Tool | Version | Source | arm64 |
 |---|---|---|---|
 | Hadoop (HDFS, YARN) | 3.4.3 | Apache release tarball `hadoop-3.4.3-aarch64.tar.gz`, built into a local image | Yes |
+| Java (Hadoop image) | 11.0.32 | `eclipse-temurin:11-jre-jammy`, pinned by digest in `docker/hadoop/Dockerfile` | Yes |
 | Spark | 4.0.5 | `apache/spark:4.0.5-scala2.13-java17-python3-ubuntu` | Yes |
 | Iceberg | 1.11.0 | `iceberg-spark-runtime-4.0_2.13` from Maven Central | n/a (JVM jar) |
 | Kafka | 4.3.2 | `apache/kafka:4.3.2` (KRaft mode) | Yes |

@@ -15,7 +15,7 @@ services:
         HADOOP_VERSION: "3.4.3"
     hostname: namenode
     command: ["namenode"]
-    ports: ["9870:9870"]
+    ports: ["127.0.0.1:9870:9870"]
     environment:
       HDFS_NAMENODE_OPTS: "-Xmx512m"
     volumes:
@@ -67,7 +67,7 @@ services:
     <<: *hadoop
     hostname: resourcemanager
     command: ["resourcemanager"]
-    ports: ["8088:8088"]
+    ports: ["127.0.0.1:8088:8088"]
     environment:
       YARN_RESOURCEMANAGER_OPTS: "-Xmx512m"
     healthcheck:
