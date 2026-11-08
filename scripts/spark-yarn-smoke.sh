@@ -13,8 +13,8 @@ out="$("${compose[@]}" --profile spark run --rm -T spark-client /opt/spark/bin/s
   --class org.apache.spark.examples.SparkPi \
   file:///opt/spark/examples/jars/spark-examples.jar 10 2>&1)" || { echo "${out}" | tail -30 >&2; fail "spark-submit failed"; }
 
-app_id="$(grep -oE 'application_[0-9]+_[0-9]+' <<< "${out}" | head -1)"
-[ -n "${app_id}" ] || fail "no YARN application id in the spark-submit output"
+[[ "${out}" =~ (application_[0-9]+_[0-9]+) ]] || fail "no YARN application id in the spark-submit output"
+app_id="${BASH_REMATCH[1]}"
 
 echo "2/2 YARN reports ${app_id} as SUCCEEDED"
 status="$("${compose[@]}" exec -T resourcemanager yarn application -status "${app_id}" 2>/dev/null)"
