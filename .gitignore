@@ -1,0 +1,18 @@
+.env
+secrets/
+
+# Private working notes (kept local; the README is the public documentation)
+CONTEXT.md
+tasks.md
+learning-tracker.md
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+
+# Local data and Docker volumes
+data/
+volumes/
+checkpoints/
