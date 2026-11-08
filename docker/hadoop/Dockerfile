@@ -1,5 +1,6 @@
-# Java 11.0.x on Ubuntu 22.04, pinned by digest; it already ships curl, tar and CA certificates.
-FROM eclipse-temurin:11-jre-jammy@sha256:0c567a8bd671331808b89a96976fabb305d57b123dec4fa62a20bfb89f2b32b9
+# Java 17 on Ubuntu 22.04, pinned by digest; Spark 4 executors run in the NodeManager's JVM and need 17.
+# It already ships curl, tar and CA certificates.
+FROM eclipse-temurin:17-jre-jammy@sha256:2a9eb226abb654c9d1f91b53cf638d20cb3abb726d1b18a67909c29515545469
 
 ARG HADOOP_VERSION=3.4.3
 ARG TARGETARCH
