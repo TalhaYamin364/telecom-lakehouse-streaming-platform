@@ -1,0 +1,102 @@
+name: telecom-hadoop
+
+x-hadoop: &hadoop
+  image: telecom-hadoop:3.4.3
+  pull_policy: never
+  networks: [lakehouse]
+
+services:
+  namenode:
+    <<: *hadoop
+    # The one service that builds the shared image; the others reuse it.
+    build:
+      context: ./hadoop
+      args:
+        HADOOP_VERSION: "3.4.3"
+    hostname: namenode
+    command: ["namenode"]
+    ports: ["127.0.0.1:9870:9870"]
+    environment:
+      HDFS_NAMENODE_OPTS: "-Xmx512m"
+    volumes:
+      - namenode-data:/data/hdfs/name
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9870/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  datanode1:
+    <<: *hadoop
+    hostname: datanode1
+    command: ["datanode"]
+    environment:
+      HDFS_DATANODE_OPTS: "-Xmx384m"
+    volumes:
+      - datanode1-data:/data/hdfs/data
+    depends_on:
+      namenode:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9864/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  datanode2:
+    <<: *hadoop
+    hostname: datanode2
+    command: ["datanode"]
+    environment:
+      HDFS_DATANODE_OPTS: "-Xmx384m"
+    volumes:
+      - datanode2-data:/data/hdfs/data
+    depends_on:
+      namenode:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9864/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  resourcemanager:
+    <<: *hadoop
+    hostname: resourcemanager
+    command: ["resourcemanager"]
+    ports: ["127.0.0.1:8088:8088"]
+    environment:
+      YARN_RESOURCEMANAGER_OPTS: "-Xmx512m"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8088/ws/v1/cluster/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  nodemanager:
+    <<: *hadoop
+    hostname: nodemanager
+    command: ["nodemanager"]
+    environment:
+      YARN_NODEMANAGER_OPTS: "-Xmx512m"
+    depends_on:
+      resourcemanager:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8042/ws/v1/node/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+networks:
+  lakehouse:
+
+volumes:
+  namenode-data:
+  datanode1-data:
+  datanode2-data:
