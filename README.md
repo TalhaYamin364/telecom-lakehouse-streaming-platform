@@ -38,7 +38,18 @@ each part is built; planned approach in italics.
 | 100x volume | *Partition by event date, compact small files, scale Kafka partitions and Spark executors; documented with measured timings.* |
 
 ## Versions
-Pinned when the cluster is built (phase 1), with Apple Silicon (arm64) support checked.
+Pinned for a MacBook (Apple Silicon, arm64) running Docker Engine 28.1.1 and Compose v2.36.
+
+| Tool | Version | Source | arm64 |
+|---|---|---|---|
+| Hadoop (HDFS, YARN) | 3.4.3 | Apache release tarball `hadoop-3.4.3-aarch64.tar.gz`, built into a local image | Yes |
+| Spark | 4.0.5 | `apache/spark:4.0.5-scala2.13-java17-python3-ubuntu` | Yes |
+| Iceberg | 1.11.0 | `iceberg-spark-runtime-4.0_2.13` from Maven Central | n/a (JVM jar) |
+| Kafka | 4.3.2 | `apache/kafka:4.3.2` (KRaft mode) | Yes |
+
+The official `apache/hadoop` images are amd64 only, so the Hadoop image is built locally from
+Apache's arm64 tarball instead of running under emulation. The Iceberg and Spark pairing
+(runtime artifact `4.0_2.13` with Spark 4.0.x) is confirmed when the bronze layer is built.
 
 ## Development workflow
 - **Branches:** trunk-based. `main` is always working; work happens on short-lived
