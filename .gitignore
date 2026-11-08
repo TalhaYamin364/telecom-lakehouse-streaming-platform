@@ -5,6 +5,10 @@ secrets/
 CONTEXT.md
 tasks.md
 learning-tracker.md
+
+# Local-only editor tooling
+.github/skills/
+.github/agents/
 .venv/
 venv/
 __pycache__/
