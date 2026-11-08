@@ -25,6 +25,19 @@ spark_jobs/    # streaming and batch jobs
 scripts/       # shell helpers (start, stop, backfill, health checks)
 ```
 
+## Run the Hadoop cluster
+One NameNode, two DataNodes (HDFS replication 2), a ResourceManager and a NodeManager.
+The image is built locally from Apache's Hadoop 3.4.3 tarball.
+
+```bash
+docker compose -f docker/compose.hadoop.yml up -d --build --wait
+scripts/hdfs-smoke.sh   # 2 live DataNodes, a running NodeManager, an HDFS write/read, replication 2
+docker compose -f docker/compose.hadoop.yml down   # add -v to also delete the HDFS data volumes
+```
+
+NameNode UI: http://localhost:9870. ResourceManager UI: http://localhost:8088.
+The NameNode formats HDFS only on first start, so restarts keep your data.
+
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
 each part is built; planned approach in italics.
