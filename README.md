@@ -49,6 +49,20 @@ NameNode UI: http://localhost:9870. ResourceManager UI: http://localhost:8088.
 Both ports are published on loopback only, so they are not reachable from other machines.
 The NameNode formats HDFS only on first start, so restarts keep your data.
 
+## Run Kafka
+A single broker in KRaft mode (no ZooKeeper), started from its own compose file.
+
+```bash
+docker compose -f docker/compose.kafka.yml up -d --wait
+scripts/kafka-smoke.sh   # broker reachable, topic cdr.raw created if missing (3 partitions), a message round-trips
+docker compose -f docker/compose.kafka.yml down   # add -v to also delete the Kafka data volume
+```
+
+Two listeners: containers use `kafka:19092`, and clients on your Mac use `localhost:9092`, published on loopback only.
+Topic auto-creation is off, so a mistyped topic name fails instead of silently creating a new topic.
+`cdr.raw` has 3 partitions, and replication factor 1 because there is one broker. Partitions are the scale-out unit, so more can be added later.
+Kafka data lives in a named volume, so restarts keep your topics and messages.
+
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
 each part is built; planned approach in italics.
@@ -70,7 +84,7 @@ Pinned for a MacBook (Apple Silicon, arm64) running Docker Engine 28.1.1 and Com
 | Java (Hadoop image) | 17.0.21 | `eclipse-temurin:17-jre-jammy`, pinned by digest in `docker/hadoop/Dockerfile` | Yes |
 | Spark | 4.0.5 | `apache/spark:4.0.5-scala2.13-java17-python3-ubuntu`, pinned by digest in `docker/compose.hadoop.yml` | Yes |
 | Iceberg | 1.11.0 | `iceberg-spark-runtime-4.0_2.13` from Maven Central | n/a (JVM jar) |
-| Kafka | 4.3.2 | `apache/kafka:4.3.2` (KRaft mode) | Yes |
+| Kafka | 4.3.2 | `apache/kafka:4.3.2`, pinned by digest in `docker/compose.kafka.yml` (KRaft mode; Java 21 inside the image) | Yes |
 
 The official `apache/hadoop` images are amd64 only, so the Hadoop image is built locally from
 Apache's arm64 tarball instead of running under emulation. The Iceberg and Spark pairing
