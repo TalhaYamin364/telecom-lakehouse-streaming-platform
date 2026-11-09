@@ -32,7 +32,8 @@ echo "2/3 topic cdr.raw exists with 3 partitions"
 # Safe to rerun: --if-not-exists never changes or duplicates an existing topic.
 k "${bin}/kafka-topics.sh" --bootstrap-server "${bootstrap}" --create --if-not-exists \
   --topic cdr.raw --partitions 3 --replication-factor 1 > /dev/null
-described="$(k "${bin}/kafka-topics.sh" --bootstrap-server "${bootstrap}" --describe --topic cdr.raw)"
+# --describe treats the name as a regex, so escape the dot or cdr-raw would also match.
+described="$(k "${bin}/kafka-topics.sh" --bootstrap-server "${bootstrap}" --describe --topic 'cdr\.raw')"
 partitions_re='PartitionCount:[[:space:]]+3([[:space:]]|$)'
 [[ "${described}" =~ ${partitions_re} ]] || fail "cdr.raw is missing or does not have exactly 3 partitions: ${described}"
 
@@ -40,7 +41,7 @@ echo "3/3 a message round-trips on a throwaway topic"
 k "${bin}/kafka-topics.sh" --bootstrap-server "${bootstrap}" --create --topic "${probe}" --partitions 1 --replication-factor 1 > /dev/null
 printf '%s\n' "hello from the smoke test" | k "${bin}/kafka-console-producer.sh" --bootstrap-server "${bootstrap}" --topic "${probe}" > /dev/null
 got="$(k "${bin}/kafka-console-consumer.sh" --bootstrap-server "${bootstrap}" --topic "${probe}" \
-  --from-beginning --max-messages 1 --timeout-ms 20000 2>/dev/null)"
+  --from-beginning --max-messages 1 --timeout-ms 20000 2>/dev/null || true)"
 [ "${got}" = "hello from the smoke test" ] || fail "read back '${got}', expected the message that was produced"
 
 echo "OK: Kafka (KRaft) is healthy and cdr.raw is ready"
