@@ -21,7 +21,7 @@ retry() {
 }
 broker_ready() { k "${bin}/kafka-broker-api-versions.sh" --bootstrap-server "${bootstrap}" > /dev/null 2>&1; }
 
-probe="smoke-$(date +%s)"
+probe="smoke-$(date +%s)-$$"
 cleanup() { k "${bin}/kafka-topics.sh" --bootstrap-server "${bootstrap}" --delete --if-exists --topic "${probe}" > /dev/null 2>&1 || true; }
 trap cleanup EXIT
 
@@ -33,7 +33,8 @@ echo "2/3 topic cdr.raw exists with 3 partitions"
 k "${bin}/kafka-topics.sh" --bootstrap-server "${bootstrap}" --create --if-not-exists \
   --topic cdr.raw --partitions 3 --replication-factor 1 > /dev/null
 described="$(k "${bin}/kafka-topics.sh" --bootstrap-server "${bootstrap}" --describe --topic cdr.raw)"
-[[ "${described}" == *"PartitionCount: 3"* ]] || fail "cdr.raw is missing or has the wrong partition count: ${described}"
+partitions_re='PartitionCount:[[:space:]]+3([[:space:]]|$)'
+[[ "${described}" =~ ${partitions_re} ]] || fail "cdr.raw is missing or does not have exactly 3 partitions: ${described}"
 
 echo "3/3 a message round-trips on a throwaway topic"
 k "${bin}/kafka-topics.sh" --bootstrap-server "${bootstrap}" --create --topic "${probe}" --partitions 1 --replication-factor 1 > /dev/null
