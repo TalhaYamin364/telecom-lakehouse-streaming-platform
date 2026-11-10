@@ -63,6 +63,27 @@ Topic auto-creation is off, so a mistyped topic name fails instead of silently c
 `cdr.raw` has 3 partitions, and replication factor 1 because there is one broker. Partitions are the scale-out unit, so more can be added later.
 Kafka data lives in a named volume, so restarts keep your topics and messages.
 
+## Generate CDR events
+A Python generator (in a container, nothing to install) writes synthetic call, SMS and data records to `cdr.raw`, with the problems real feeds have, so the later layers have something to fix.
+
+```bash
+docker compose -f docker/compose.kafka.yml --profile generator run --rm generator --count 10000
+# --rate 50 paces it at 50 events/s; --count 0 streams until stopped; --seed and --start choose the events
+cd generator && python3 -m unittest   # unit tests, standard library only
+```
+
+| Behaviour | Detail |
+|---|---|
+| Mix | 70% data, 20% voice, 10% SMS; 10,000 subscribers |
+| Exact duplicates | 2% of events are sent again, unchanged, up to 100 events later |
+| Near-duplicates | 1% are sent again with the same `event_id`, a corrected `charge_paisa` and a later `emitted_at`; silver keeps the latest |
+| Late events | 5% have `event_time` earlier than `emitted_at`: mostly 1-10 minutes, 10% of them 1-3 hours, so some arrive after a 10 minute watermark |
+| Key | Messages are keyed by `msisdn`, so one subscriber's events stay in one partition, in order |
+| Phone numbers | All numbers are in `+88010xxxxxxxx`; Bangladesh mobile numbers start 013 to 019, so none belongs to a real person |
+
+Runs are reproducible: the same `--seed`, `--start` and `--step-ms` give identical events and `event_id`s. Running it twice therefore re-sends the same events as duplicates, which is the replay case the pipeline must absorb; use a different `--seed` for new events. `--start now` is not reproducible, so give each such run its own `--seed`.
+Delivery uses an idempotent producer with `acks=all`. A failed or partial delivery exits non-zero, and stopping it (Ctrl-C or `docker stop`) flushes what is queued before it exits.
+
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
 each part is built; planned approach in italics.
@@ -85,6 +106,8 @@ Pinned for a MacBook (Apple Silicon, arm64) running Docker Engine 28.1.1 and Com
 | Spark | 4.0.5 | `apache/spark:4.0.5-scala2.13-java17-python3-ubuntu`, pinned by digest in `docker/compose.hadoop.yml` | Yes |
 | Iceberg | 1.11.0 | `iceberg-spark-runtime-4.0_2.13` from Maven Central | n/a (JVM jar) |
 | Kafka | 4.3.2 | `apache/kafka:4.3.2`, pinned by digest in `docker/compose.kafka.yml` (KRaft mode; Java 21 inside the image) | Yes |
+| Python (generator) | 3.12.16 | `python:3.12-slim`, pinned by digest in `generator/Dockerfile` | Yes |
+| confluent-kafka | 2.16.1 | PyPI, pinned in `generator/requirements.txt`; prebuilt arm64 wheel | Yes |
 
 The official `apache/hadoop` images are amd64 only, so the Hadoop image is built locally from
 Apache's arm64 tarball instead of running under emulation. The Iceberg and Spark pairing
