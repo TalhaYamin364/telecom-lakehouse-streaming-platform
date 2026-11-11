@@ -26,8 +26,17 @@ def summarize(lines):
         by_id[record["event_id"]].append(record)
         partitions_of[key].add(partition)
 
-    exact = [copies for copies in by_id.values() if len(copies) > 1 and all(c == copies[0] for c in copies)]
-    near = [copies for copies in by_id.values() if len(copies) > 1 and any(c != copies[0] for c in copies)]
+    # One id can have both kinds: an original, its correction, and a re-send of either. Classify by payload within each id.
+    exact, near = [], []
+    for copies in by_id.values():
+        payloads = {}
+        for record in copies:
+            payloads.setdefault(json.dumps(record, sort_keys=True), []).append(record)
+        repeated = next((same for same in payloads.values() if len(same) > 1), None)
+        if repeated:
+            exact.append(repeated[:2])
+        if len(payloads) > 1:
+            near.append([same[0] for same in payloads.values()][:2])
     late = [r for _, _, r in rows if seconds_late(r) > 0]
     return {
         "messages": len(rows),

@@ -23,6 +23,16 @@ class SummarizeTest(unittest.TestCase):
         self.assertTrue(summary["late"] and summary["very_late"])
         self.assertEqual(summary["split_subscribers"], 0)
 
+    def test_an_id_with_both_a_resend_and_a_correction_counts_as_both(self):
+        original = next(r for k, r in generate(3, 10, START, STEP) if k == "new")
+        correction = {**original, "charge_paisa": original["charge_paisa"] + 5}
+        for sequence in ([original, correction, original, correction], [original, original, correction]):
+            lines = [f"Partition:0|k|{json.dumps(r)}\n" for r in sequence]
+            summary = summarize(lines)
+            self.assertEqual((len(summary["exact_duplicates"]), len(summary["near_duplicates"])), (1, 1))
+            self.assertEqual(summary["exact_duplicates"][0][0], summary["exact_duplicates"][0][1])
+            self.assertNotEqual(summary["near_duplicates"][0][0], summary["near_duplicates"][0][1])
+
     def test_a_subscriber_in_two_partitions_is_reported(self):
         events = [r for _, r in generate(3, 4, START, STEP)]
         lines = [f"Partition:{n % 2}|same-key|{json.dumps(r)}\n" for n, r in enumerate(events)]
