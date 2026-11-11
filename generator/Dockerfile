@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY cdr_events.py producer.py ./
+COPY cdr_events.py producer.py summarize.py ./
 
 USER nobody
 ENTRYPOINT ["python", "producer.py"]
