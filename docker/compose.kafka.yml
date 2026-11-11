@@ -35,6 +35,17 @@ services:
       retries: 12
       start_period: 20s
 
+  # Usage: docker compose -f docker/compose.kafka.yml --profile generator run --rm generator --count 10000
+  generator:
+    build: ../generator
+    profiles: [generator]
+    networks: [kafka]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    # Longer than the producer's 30s flush, so a stop during a slow drain is not SIGKILLed.
+    stop_grace_period: 40s
+
 networks:
   kafka:
 
