@@ -4,8 +4,9 @@ services:
   kafka:
     image: apache/kafka:4.3.2@sha256:852a0d49fc4e656b022e7f23785411802c9a088c78a7c5e39f33969de9c227a7
     hostname: kafka
-    # shortcut: own network, so Spark joins it explicitly; share one network when the bronze job (#7) needs both stacks.
-    networks: [kafka]
+    # Second network: Spark's YARN containers live on the Hadoop network and read from this broker.
+    # It is created by `docker compose -f docker/compose.hadoop.yml up`, so start the Hadoop stack first.
+    networks: [kafka, lakehouse]
     # Host clients use localhost:9092 (loopback only); containers use kafka:19092.
     ports: ["127.0.0.1:9092:9092"]
     environment:
@@ -48,6 +49,9 @@ services:
 
 networks:
   kafka:
+  lakehouse:
+    external: true
+    name: telecom-hadoop_lakehouse
 
 volumes:
   kafka-data:
