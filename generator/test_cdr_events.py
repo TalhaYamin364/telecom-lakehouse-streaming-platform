@@ -115,6 +115,10 @@ class CopiesAreNeverLostTest(unittest.TestCase):
     def test_copies_follow_originals_in_a_normal_run(self):
         self.copies_follow_originals(run(count=5_000))
 
+    def test_starts_less_than_a_millisecond_apart_still_give_different_ids(self):
+        ids = lambda start: {r["event_id"] for k, r in generate(1, 200, start, STEP) if k == "new"}
+        self.assertFalse(ids(START + timedelta(microseconds=100)) & ids(START + timedelta(microseconds=900)))
+
     def test_changing_the_step_changes_every_event_id(self):
         ids = lambda step: {r["event_id"] for k, r in generate(1, 500, START, step) if k == "new"}
         self.assertFalse(ids(STEP) & ids(timedelta(seconds=1)))

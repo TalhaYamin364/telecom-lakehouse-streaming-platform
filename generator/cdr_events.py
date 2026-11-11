@@ -74,7 +74,7 @@ def generate(seed, count, start, step):
                 still_pending.append((due, kind, record))
         pending = still_pending
 
-        event_id = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{seed}:{iso(start)}:{step.total_seconds()}:{i}"))
+        event_id = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{seed}:{start.isoformat()}:{step.total_seconds()}:{i}"))
         record = _record(rng, event_id, rng.choices(EVENT_TYPES, EVENT_WEIGHTS)[0], now)
         yield "new", record
 

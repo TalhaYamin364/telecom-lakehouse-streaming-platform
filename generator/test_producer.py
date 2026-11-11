@@ -1,3 +1,5 @@
+import contextlib
+import io
 import itertools
 import json
 import unittest
@@ -6,17 +8,20 @@ from unittest import mock
 
 import producer as producer_module
 from cdr_events import generate
-from producer import parse_start, publish
+from producer import build_parser, parse_start, publish
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 STEP = timedelta(milliseconds=100)
 
 
 class FakeProducer:
+    """Like the real client, delivery callbacks do not run in produce(): each one fires on the second poll() after it,
+    or in flush(). poll(0) straight after produce() therefore sees nothing yet."""
+
     def __init__(self, full_first=0, fail_delivery=False, undelivered=0, produce_error=None):
         self.messages, self.full_left, self.produce_error = [], full_first, produce_error
         self.fail_delivery, self.undelivered = fail_delivery, undelivered
-        self.polls, self.flushes = 0, 0
+        self.polls, self.flushes, self.poll_timeouts, self.pending = 0, 0, [], []
 
     def produce(self, topic, key, value, on_delivery):
         if self.produce_error:
@@ -25,15 +30,26 @@ class FakeProducer:
             self.full_left -= 1
             raise BufferError("queue full")
         self.messages.append((topic, key, value))
-        on_delivery("boom" if self.fail_delivery else None, None)
+        self.pending.append([0, on_delivery])
 
-    def poll(self, _timeout):
+    def _deliver(self, everything):
+        for item in self.pending:
+            item[0] += 1
+        due = [item for item in self.pending if everything or item[0] >= 2]
+        self.pending = [item for item in self.pending if item not in due]
+        for _, callback in due:
+            callback("boom" if self.fail_delivery else None, None)
+
+    def poll(self, timeout):
         self.polls += 1
+        self.poll_timeouts.append(timeout)
         if self.polls > 50_000:
             raise AssertionError("the publish loop never ended")
+        self._deliver(everything=False)
 
     def flush(self, _timeout):
         self.flushes += 1
+        self._deliver(everything=True)
         return self.undelivered
 
 
@@ -91,9 +107,64 @@ class PublishTest(unittest.TestCase):
         self.assertEqual((len(producer.messages), sum(sent.values())), (0, 0))
         self.assertEqual(producer.flushes, 1)
 
+    def test_pacing_waits_in_short_polls_so_a_stop_request_is_noticed_quickly(self):
+        producer = FakeProducer()
+        with mock.patch.object(producer_module.time, "sleep", side_effect=AssertionError("pacing must poll, not sleep")):
+            sent, _ = publish(producer, "cdr.raw", generate(7, 1_000, START, STEP), rate=0.01,
+                              should_stop=lambda: producer.polls >= 6)
+        self.assertEqual(sum(sent.values()), 1)  # one event goes out, then the stop request ends the wait for the next
+        self.assertEqual(max(producer.poll_timeouts), 0.5)
+
+    def test_pacing_wait_notices_a_delivery_failure_that_only_poll_can_report(self):
+        producer = FakeProducer(fail_delivery=True)
+        with mock.patch.object(producer_module.time, "sleep", side_effect=AssertionError("sleeping hides callbacks")):
+            _, problems = publish(producer, "cdr.raw", generate(7, 1_000, START, STEP), rate=0.01)
+        self.assertEqual((len(producer.messages), problems), (1, ["boom"]))
+
+    def test_the_queue_is_flushed_even_when_the_event_source_raises(self):
+        def exploding():
+            yield from itertools.islice(generate(7, 0, START, STEP), 3)
+            raise RuntimeError("generator failed")
+
+        producer = FakeProducer()
+        with self.assertRaises(RuntimeError):
+            publish(producer, "cdr.raw", exploding())
+        self.assertEqual((len(producer.messages), producer.flushes), (3, 1))
+
     def test_start_accepts_iso_and_now(self):
         self.assertEqual(parse_start("2026-01-01T00:00:00Z"), START)
+        self.assertEqual(parse_start("2026-01-01T06:00:00+06:00"), START)
         self.assertLess((datetime.now(timezone.utc) - parse_start("now")).total_seconds(), 5)
+
+
+def parse(*argv):
+    with contextlib.redirect_stderr(io.StringIO()):
+        return build_parser().parse_args(list(argv))
+
+
+class ArgumentTest(unittest.TestCase):
+    def test_defaults_are_valid(self):
+        args = parse()
+        self.assertEqual((args.count, args.rate, args.step_ms, args.start), (10_000, 0, 100, START))
+
+    def test_bad_values_are_rejected_before_anything_starts(self):
+        bad = [
+            ("--count", "-1"), ("--count", "abc"),
+            ("--rate", "-1"), ("--rate", "nan"), ("--rate", "inf"), ("--rate", "abc"),
+            ("--step-ms", "0"), ("--step-ms", "-5"), ("--step-ms", "86400001"), ("--step-ms", "1" + "0" * 100),
+            ("--start", ""), ("--start", "NaN"), ("--start", "0"), ("--start", "2026-01-01"),
+            ("--start", "2026-01-01T00:00:00"), ("--start", "9999-12-31T23:59:59.900Z"),
+            ("--start", "0001-01-01T00:00:00Z"),
+            ("--topic", ""), ("--topic", "  "), ("--bootstrap", ""),
+        ]
+        for flag, value in bad:
+            with self.subTest(flag=flag, value=value[:20]), self.assertRaises(SystemExit):
+                parse(flag, value)
+
+    def test_good_edge_values_are_accepted(self):
+        args = parse("--count", "0", "--rate", "0.01", "--step-ms", "86400000", "--start", "now")
+        self.assertEqual((args.count, args.rate, args.step_ms), (0, 0.01, 86_400_000))
+        self.assertEqual(parse("--start", "2026-01-01T00:00:00Z").start, START)
 
 
 if __name__ == "__main__":
