@@ -11,10 +11,11 @@ docker compose -f docker/compose.kafka.yml exec -T kafka /opt/kafka/bin/kafka-to
 
 # Topic deletion is asynchronous: wait until the topic is really gone, or the next step would reuse the old one.
 gone=false
-for _ in $(seq 1 30); do
+deadline=$((SECONDS + 30))
+while (( SECONDS < deadline )); do
   topics="$(docker compose -f docker/compose.kafka.yml exec -T kafka /opt/kafka/bin/kafka-topics.sh \
     --bootstrap-server localhost:19092 --list)"
-  if ! grep -qx 'cdr.raw' <<< "${topics}"; then gone=true; break; fi
+  if ! grep -Fxq 'cdr.raw' <<< "${topics}"; then gone=true; break; fi  # -F: the dot is a dot, so cdr-raw does not match
   sleep 1
 done
 ${gone} || { echo "FAIL: cdr.raw still exists 30s after deleting it" >&2; exit 1; }

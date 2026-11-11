@@ -38,7 +38,9 @@ generate() {
 }
 
 echo "1/4 generate 1000 events and ingest them (on YARN)"
-scripts/kafka-smoke.sh > /dev/null  # creates cdr.raw on a fresh Kafka volume, where nothing else would
+# Creates cdr.raw on a fresh Kafka volume, where nothing else would (a no-op if it exists, whatever its partition count).
+"${kafka[@]}" exec -T kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:19092 \
+  --create --if-not-exists --topic cdr.raw --partitions 3 --replication-factor 1 > /dev/null
 generate 1000
 scripts/bronze-stream.sh --once > /dev/null 2>&1 || fail "bronze job failed (run scripts/bronze-stream.sh --once to see why)"
 check "first load"

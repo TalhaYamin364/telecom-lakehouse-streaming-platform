@@ -98,6 +98,8 @@ scripts/bronze-smoke.sh           # about 2 minutes: bronze rows equal Kafka mes
 scripts/bronze-reset.sh           # delete the table and checkpoint and recreate an empty cdr.raw (they must be reset together)
 ```
 
+The table, its checkpoint and the Kafka topic belong together: if you delete the Kafka volume or recreate `cdr.raw`, run `scripts/bronze-reset.sh` too, or bronze would resume from the old topic's offsets.
+
 **Restart safety.** The job keeps a checkpoint on HDFS (`/checkpoints/bronze_cdr_raw`) of which Kafka offsets Iceberg has already committed, and each micro-batch is one atomic Iceberg commit. A stop or a crash therefore resumes from the last commit. The smoke test checks that bronze holds exactly one row per Kafka message (rows equal Kafka's total end offsets, and distinct `(partition, offset)` pairs equal rows). It was also checked by hard-stopping (SIGKILL) the driver while the generator was still producing: Kafka held 9,883 messages at the crash and bronze was 338 behind; after the restart bronze held exactly 10,598 rows for 10,598 messages.
 
 ## Design questions
