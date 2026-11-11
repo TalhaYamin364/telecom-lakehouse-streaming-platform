@@ -92,6 +92,7 @@ Start the Hadoop stack first, then Kafka: Kafka joins the Hadoop network so the 
 
 ```bash
 docker compose -f docker/compose.hadoop.yml up -d --wait && docker compose -f docker/compose.kafka.yml up -d --wait
+scripts/kafka-smoke.sh            # creates the cdr.raw topic (auto-creation is off, so nothing else will)
 scripts/bronze-stream.sh --once   # ingest what is in Kafka now on YARN, then stop; without --once it runs until Ctrl-C
 scripts/bronze-smoke.sh           # about 2 minutes: bronze rows equal Kafka messages after a load, a second load and a rerun
 scripts/bronze-reset.sh           # delete the table and checkpoint and recreate an empty cdr.raw (they must be reset together)

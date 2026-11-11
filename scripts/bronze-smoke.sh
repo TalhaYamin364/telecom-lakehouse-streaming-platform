@@ -38,6 +38,7 @@ generate() {
 }
 
 echo "1/4 generate 1000 events and ingest them (on YARN)"
+scripts/kafka-smoke.sh > /dev/null  # creates cdr.raw on a fresh Kafka volume, where nothing else would
 generate 1000
 scripts/bronze-stream.sh --once > /dev/null 2>&1 || fail "bronze job failed (run scripts/bronze-stream.sh --once to see why)"
 check "first load"
