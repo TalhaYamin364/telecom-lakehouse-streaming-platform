@@ -55,7 +55,8 @@ scripts/bronze-stream.sh --once > /dev/null 2>&1 || fail "bronze job failed on t
 check "rerun"
 
 echo "4/4 the table is partitioned by day in HDFS"
-docker compose -f docker/compose.hadoop.yml exec -T namenode hdfs dfs -ls /warehouse/bronze/cdr_raw/data | grep -q 'kafka_timestamp_day=' \
+listing="$(docker compose -f docker/compose.hadoop.yml exec -T namenode hdfs dfs -ls /warehouse/bronze/cdr_raw/data)"  # not piped into grep -q: it exits early and the pipe breaks
+grep -q 'kafka_timestamp_day=' <<< "${listing}" \
   || fail "no kafka_timestamp_day= partition folders under /warehouse/bronze/cdr_raw/data"
 
 echo "OK: bronze matches Kafka exactly, with no loss and no duplicates"
