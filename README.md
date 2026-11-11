@@ -42,8 +42,8 @@ scripts/spark-yarn-smoke.sh   # runs SparkPi on YARN in cluster mode and checks 
 docker compose -f docker/compose.hadoop.yml down   # add -v to also delete the HDFS data volumes
 ```
 
-Spark jobs are submitted from a short-lived `spark-client` container (compose profile `spark`).
-The driver and executors run inside the NodeManager container, so the Hadoop image uses Java 17 to match Spark 4.
+Spark jobs are submitted from a short-lived `spark-client` container (compose profile `spark`), built from `docker/spark/Dockerfile`: the Spark image plus the Iceberg and Kafka connector jars, each pinned by sha256.
+For the SparkPi smoke test the driver runs on the cluster (cluster mode). For the streaming job the driver stays in the `spark-client` container (client mode) and only the executors run on YARN, because the NodeManager image has no Python. The NodeManager image uses Java 17 to match Spark 4.
 
 NameNode UI: http://localhost:9870. ResourceManager UI: http://localhost:8088.
 Both ports are published on loopback only, so they are not reachable from other machines.
@@ -85,6 +85,20 @@ Runs are reproducible: the same `--seed`, `--start` and `--step-ms` give identic
 Delivery uses an idempotent producer with `acks=all`. The first failed delivery stops generation and the run exits non-zero; a missing topic ends the run within about 30s, when the flush gives up. Stopping it with Ctrl-C or `docker stop` ends generation, then flushes what is queued (a second stop during that flush does not cut it short, and the service allows 40s for it); a finite run stopped early prints `stopped early: N of M events` and exits 0.
 Bad flag values are rejected before anything starts: `--start` needs a timezone and a year from 1970 to 2100, `--step-ms` is 1 to 86,400,000, `--rate` and `--count` are 0 or more, and `--topic` and `--bootstrap` cannot be empty.
 
+## Bronze layer: Kafka to Iceberg
+A Spark Structured Streaming job reads `cdr.raw` and appends every message, untouched, to the Iceberg table `lake.bronze.cdr_raw` on HDFS (Hadoop catalog, warehouse `hdfs://namenode:8020/warehouse`, partitioned by day of the Kafka timestamp). Columns: Kafka topic, partition, offset and timestamp, the key, the raw JSON value, and `ingested_at`. Bronze does no parsing or dedup; that is silver's job.
+
+Start the Hadoop stack first, then Kafka: Kafka joins the Hadoop network so the YARN executors can reach it.
+
+```bash
+docker compose -f docker/compose.hadoop.yml up -d --wait && docker compose -f docker/compose.kafka.yml up -d --wait
+scripts/bronze-stream.sh --once   # ingest what is in Kafka now on YARN, then stop; without --once it runs until Ctrl-C
+scripts/bronze-smoke.sh           # about 2 minutes: bronze rows equal Kafka messages after a load, a second load and a rerun
+scripts/bronze-reset.sh           # delete the table and checkpoint and recreate an empty cdr.raw (they must be reset together)
+```
+
+**Restart safety.** The job keeps a checkpoint on HDFS (`/checkpoints/bronze_cdr_raw`) of which Kafka offsets Iceberg has already committed, and each micro-batch is one atomic Iceberg commit. A stop or a crash therefore resumes from the last commit. The smoke test checks that bronze holds exactly one row per Kafka message (rows equal Kafka's total end offsets, and distinct `(partition, offset)` pairs equal rows). It was also checked by hard-stopping (SIGKILL) the driver while the generator was still producing: Kafka held 9,883 messages at the crash and bronze was 338 behind; after the restart bronze held exactly 10,598 rows for 10,598 messages.
+
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
 each part is built; planned approach in italics.
@@ -104,15 +118,17 @@ Pinned for a MacBook (Apple Silicon, arm64) running Docker Engine 28.1.1 and Com
 |---|---|---|---|
 | Hadoop (HDFS, YARN) | 3.4.3 | Apache release tarball `hadoop-3.4.3-aarch64.tar.gz`, built into a local image | Yes |
 | Java (Hadoop image) | 17.0.21 | `eclipse-temurin:17-jre-jammy`, pinned by digest in `docker/hadoop/Dockerfile` | Yes |
-| Spark | 4.0.5 | `apache/spark:4.0.5-scala2.13-java17-python3-ubuntu`, pinned by digest in `docker/compose.hadoop.yml` | Yes |
-| Iceberg | 1.11.0 | `iceberg-spark-runtime-4.0_2.13` from Maven Central | n/a (JVM jar) |
+| Spark | 4.0.5 | `apache/spark:4.0.5-scala2.13-java17-python3-ubuntu`, pinned by digest in `docker/spark/Dockerfile` | Yes |
+| Iceberg | 1.11.0 | `iceberg-spark-runtime-4.0_2.13`, sha256-pinned in `docker/spark/Dockerfile` | n/a (JVM jar) |
+| Spark Kafka connector | 4.0.5 | `spark-sql-kafka-0-10_2.13` and `spark-token-provider-kafka-0-10_2.13`, sha256-pinned | n/a (JVM jar) |
+| kafka-clients, commons-pool2 | 3.9.1, 2.12.0 | Maven Central, sha256-pinned; the versions Spark 4.0.5's connector depends on | n/a (JVM jar) |
 | Kafka | 4.3.2 | `apache/kafka:4.3.2`, pinned by digest in `docker/compose.kafka.yml` (KRaft mode; Java 21 inside the image) | Yes |
 | Python (generator) | 3.12.16 | `python:3.12-slim`, pinned by digest in `generator/Dockerfile` | Yes |
 | confluent-kafka | 2.16.1 | PyPI, pinned in `generator/requirements.txt`; prebuilt arm64 wheel | Yes |
 
 The official `apache/hadoop` images are amd64 only, so the Hadoop image is built locally from
-Apache's arm64 tarball instead of running under emulation. The Iceberg and Spark pairing
-(runtime artifact `4.0_2.13` with Spark 4.0.x) is confirmed when the bronze layer is built.
+Apache's arm64 tarball instead of running under emulation. Iceberg runtime `4.0_2.13` 1.11.0 with Spark 4.0.5
+is confirmed: the bronze job runs on YARN and the smoke test passes.
 
 ## Development workflow
 - **Branches:** trunk-based. `main` is always working; work happens on short-lived
@@ -133,4 +149,4 @@ Hadoop cluster, Kafka events, bronze layer, silver and gold, orchestration and
 shell, reporting and performance, wrap-up.
 
 ## Status
-Planning.
+In build. Running and tested: HDFS and YARN, Spark on YARN, Kafka (KRaft), the CDR generator, and the Kafka to Iceberg bronze layer. Next: silver (dedupe, validation, masking, late data) and gold.
