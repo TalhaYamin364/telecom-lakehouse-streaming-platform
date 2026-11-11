@@ -10,6 +10,7 @@ cd "$(dirname "$0")/.."
 kafka=(docker compose -f docker/compose.kafka.yml)
 spark=(docker compose -f docker/compose.hadoop.yml --profile spark run --rm -T spark-client)
 fail() { echo "FAIL: $1" >&2; exit 1; }
+indent() { sed 's/^/    /'; }
 
 generate() {  # generate <count> <seed> [start]; prints how many distinct events were created
   local out args=(--count "$1" --seed "$2")
@@ -54,7 +55,7 @@ echo "2/6 generate 1000 events and 4 bad records, then build bronze and silver"
 total="$(generate 1000 7001)"
 inject_bad_records
 ingest
-report="$(silver_check)"; echo "${report}" | sed 's/^/    /'
+report="$(silver_check)"; indent <<< "${report}"
 expect "first build" SILVER_ROWS "$(value SILVER_ROWS "${report}")" "${total}"
 expect "first build" DISTINCT_IDS "$(value DISTINCT_IDS "${report}")" "${total}"
 expect "first build" LEAKED_NUMBERS "$(value LEAKED_NUMBERS "${report}")" 0
@@ -74,7 +75,7 @@ expect "replay" SILVER_ROWS "$(value SILVER_ROWS "$(silver_check)")" "${total}"
 echo "5/6 events from two days earlier arrive late: they land in that day's partition, silver has no duplicates"
 more="$(generate 500 7002 2025-12-29T00:00:00Z)"
 ingest
-report="$(silver_check)"; echo "${report}" | sed 's/^/    /'
+report="$(silver_check)"; indent <<< "${report}"
 expect "late events" SILVER_ROWS "$(value SILVER_ROWS "${report}")" "$((total + more))"
 expect "late events" DISTINCT_IDS "$(value DISTINCT_IDS "${report}")" "$((total + more))"
 expect "late events" LATEST_MISMATCH "$(value LATEST_MISMATCH "${report}")" 0
