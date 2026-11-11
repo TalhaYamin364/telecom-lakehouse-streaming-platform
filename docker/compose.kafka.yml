@@ -43,6 +43,8 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    # Longer than the producer's 30s flush, so a stop during a slow drain is not SIGKILLed.
+    stop_grace_period: 40s
 
 networks:
   kafka:

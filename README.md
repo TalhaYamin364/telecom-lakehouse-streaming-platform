@@ -82,7 +82,7 @@ cd generator && python3 -m unittest   # unit tests, standard library only
 | Phone numbers | All numbers are in `+88010xxxxxxxx`; Bangladesh mobile numbers start 013 to 019, so none belongs to a real person |
 
 Runs are reproducible: the same `--seed`, `--start` and `--step-ms` give identical events and `event_id`s. Running it twice therefore re-sends the same events as duplicates, which is the replay case the pipeline must absorb; use a different `--seed` for new events. `--start now` is not reproducible, so give each such run its own `--seed`.
-Delivery uses an idempotent producer with `acks=all`. A failed or partial delivery exits non-zero, and stopping it (Ctrl-C or `docker stop`) flushes what is queued before it exits.
+Delivery uses an idempotent producer with `acks=all`. The first failed delivery stops generation and the run exits non-zero (a missing topic is detected after about 30s). Stopping it with Ctrl-C or `docker stop` ends generation, then flushes what is queued; a second stop during that flush does not cut it short, and the service allows 40s for it.
 
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
