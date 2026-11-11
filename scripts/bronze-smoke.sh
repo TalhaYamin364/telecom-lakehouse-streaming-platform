@@ -16,6 +16,8 @@ kafka_total() {
 }
 
 # Prints "rows distinct_offsets" for the bronze table.
+# The command is single-quoted on purpose: $(ls ...) must expand inside the container, not on the host.
+# shellcheck disable=SC2016
 bronze_counts() {
   "${spark[@]}" bash -c '/opt/spark/bin/spark-submit --master "local[1]" --jars "$(ls /opt/extra-jars/*.jar | paste -sd, -)" \
     --driver-memory 512m /opt/spark_jobs/bronze_check.py' 2>&1 \
