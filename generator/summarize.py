@@ -61,7 +61,7 @@ def show(summary):
     for label, example in (
         ("An exact duplicate (same event_id twice):", summary["exact_duplicates"][:1] and summary["exact_duplicates"][0][:2]),
         ("A near-duplicate (same event_id, corrected charge):", summary["near_duplicates"][:1] and summary["near_duplicates"][0][:2]),
-        ("A very late event:", summary["very_late"][:1]),
+        ("A very late event:" if summary["very_late"] else "A late event:", (summary["very_late"] or summary["late"])[:1]),
     ):
         if example:
             print(f"\n{label}")

@@ -1,9 +1,11 @@
+import contextlib
+import io
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
 
 from cdr_events import generate
-from summarize import summarize
+from summarize import show, summarize
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 STEP = timedelta(milliseconds=100)
@@ -32,6 +34,16 @@ class SummarizeTest(unittest.TestCase):
             self.assertEqual((len(summary["exact_duplicates"]), len(summary["near_duplicates"])), (1, 1))
             self.assertEqual(summary["exact_duplicates"][0][0], summary["exact_duplicates"][0][1])
             self.assertNotEqual(summary["near_duplicates"][0][0], summary["near_duplicates"][0][1])
+
+    def test_a_late_event_is_shown_even_when_none_is_over_ten_minutes_late(self):
+        original = next(r for k, r in generate(3, 10, START, STEP) if k == "new")
+        late = {**original, "event_time": "2025-12-31T23:55:00.000Z", "emitted_at": "2026-01-01T00:00:00.000Z"}  # 5 minutes late
+        lines = [f"Partition:0|k|{json.dumps(r)}\n" for r in (late, late)]
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            show(summarize(lines))
+        self.assertIn("A late event:", buffer.getvalue())
+        self.assertNotIn("A very late event:", buffer.getvalue())
 
     def test_a_subscriber_in_two_partitions_is_reported(self):
         events = [r for _, r in generate(3, 4, START, STEP)]
