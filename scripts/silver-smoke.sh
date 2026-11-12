@@ -25,9 +25,10 @@ produce_raw() {  # one Kafka message per argument, exactly as given
     --bootstrap-server localhost:19092 --topic cdr.raw > /dev/null
 }
 
-inject_bad_records() {  # five records that must be quarantined, each breaking a different rule
+inject_bad_records() {  # six records that must be quarantined, each breaking a different rule
   produce_raw \
     'this is not json' \
+    '{"event_id":"+8801000000009","event_type":"DATA","msisdn":"+8801000000001","cell_id":"DHK-0001","event_time":"2026-01-01T00:00:00.000Z","emitted_at":"2026-01-01T00:00:01.000Z","bytes_up":1,"bytes_down":1,"charge_paisa":1}' \
     '{"event_id":"bad-msisdn","event_type":"VOICE","msisdn":"+8801234","counterparty_msisdn":"+88010000000001","cell_id":"DHK-0001","event_time":"2026-01-01T00:00:00.000Z","emitted_at":"2026-01-01T00:00:01.000Z","duration_sec":10,"charge_paisa":20}' \
     '{"event_id":"bad-duration","event_type":"VOICE","msisdn":"+8801000000001","counterparty_msisdn":"+8801000000002","cell_id":"DHK-0001","event_time":"2026-01-01T00:00:00.000Z","emitted_at":"2026-01-01T00:00:01.000Z","duration_sec":-5,"charge_paisa":20}' \
     '{"event_id":"bad-type","event_type":"FAX","msisdn":"+8801000000001","cell_id":"DHK-0001","event_time":"2026-01-01T00:00:00.000Z","emitted_at":"2026-01-01T00:00:01.000Z","charge_paisa":20}' \
@@ -65,7 +66,7 @@ expect() {  # expect <label> <name> <actual> <wanted>
 echo "1/6 start from an empty lake"
 scripts/lake-reset.sh > /dev/null
 
-echo "2/6 generate 1000 events, 5 bad records and one event to be corrected later, then build bronze and silver"
+echo "2/6 generate 1000 events, 6 bad records and one event to be corrected later, then build bronze and silver"
 total="$(generate 1000 7001)"
 inject_bad_records
 fix_time_original
@@ -75,7 +76,7 @@ expect "first build" SILVER_ROWS "$(value SILVER_ROWS "${report}")" "$((total + 
 expect "first build" DISTINCT_IDS "$(value DISTINCT_IDS "${report}")" "$((total + 1))"
 expect "first build" LEAKED_NUMBERS "$(value LEAKED_NUMBERS "${report}")" 0
 expect "first build" LATEST_MISMATCH "$(value LATEST_MISMATCH "${report}")" 0
-expect "first build" REJECTED "$(value REJECTED "${report}")" 5
+expect "first build" REJECTED "$(value REJECTED "${report}")" 6
 expect "first build" FIXTIME_CHARGE "$(value FIXTIME_CHARGE "${report}")" 10
 [ "$(value CORRECTED_IDS "${report}")" -gt 0 ] || fail "no corrected events were generated, so latest-wins was not tested"
 

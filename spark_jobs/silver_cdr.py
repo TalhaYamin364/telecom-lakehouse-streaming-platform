@@ -22,6 +22,7 @@ REJECTED = "lake.silver.cdr_rejected"
 PROGRESS = "lake.silver.progress"
 
 MSISDN = r"^\+8801[0-9]{9}$"  # Bangladesh mobile number in international form
+PHONE_ANYWHERE = r"\+8801[0-9]{9}"  # the same format, found anywhere inside a longer string
 EVENT_TYPES = ("VOICE", "SMS", "DATA")
 
 SCHEMA = T.StructType([
@@ -81,6 +82,8 @@ def rejection_reason(row):
         ("invalid msisdn", ~F.col("msisdn").rlike(MSISDN)),
         ("invalid counterparty", F.col("event_type").isin("VOICE", "SMS") & ~F.col("counterparty_msisdn").rlike(MSISDN)),
         ("missing cell_id", F.col("cell_id").isNull() | (F.trim(F.col("cell_id")) == "")),
+        # event_id and cell_id are copied to silver as they are, so a phone number in either would leak.
+        ("phone number in event_id or cell_id", F.col("event_id").rlike(PHONE_ANYWHERE) | F.col("cell_id").rlike(PHONE_ANYWHERE)),
         ("invalid event_time", F.col("event_ts").isNull()),
         ("invalid emitted_at", F.col("emitted_ts").isNull()),
         ("event_time after emitted_at", F.col("event_ts") > F.col("emitted_ts")),
