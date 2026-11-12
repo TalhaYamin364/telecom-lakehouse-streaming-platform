@@ -22,6 +22,7 @@ from pyspark.sql import functions as F
 
 from silver_cdr import CHANGED_DAYS, SILVER, build_session
 from silver_cdr import PROGRESS as SILVER_PROGRESS
+from silver_cdr import create_tables as create_silver_tables
 
 USAGE = "lake.gold.daily_usage_per_subscriber"
 REVENUE = "lake.gold.revenue_by_event_type"
@@ -101,7 +102,8 @@ def main():
 
     spark = build_session()
     spark.sparkContext.setLogLevel("WARN")
-    spark.sql("CREATE NAMESPACE IF NOT EXISTS lake.silver")
+    # Silver's tables too, if missing: on a lake built by an older silver job there is no changed_days table yet.
+    create_silver_tables(spark)
     create_tables(spark)
 
     newest_change = None

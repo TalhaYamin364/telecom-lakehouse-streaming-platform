@@ -88,8 +88,8 @@ for day in 2025-12-28 2025-12-31 2026-01-01; do
   expect "backfill leaves other days alone" "computed_at of ${day}" "$(computed_at "${days3}" "${day}")" "$(computed_at "${days2}" "${day}")"
 done
 
-echo "7/8 wipe gold and rebuild it from silver: the first run builds every day silver has, even with no change markers for them"
-docker compose -f docker/compose.hadoop.yml exec -T namenode hdfs dfs -rm -r -f /warehouse/gold > /dev/null
+echo "7/8 wipe gold and the change markers, then rebuild gold from silver: an older lake with no markers still builds every day"
+docker compose -f docker/compose.hadoop.yml exec -T namenode hdfs dfs -rm -r -f /warehouse/gold /warehouse/silver/changed_days > /dev/null
 rebuilt="$(gold)"; echo "${rebuilt}" | indent
 report="$(gold_check)"
 reconcile "rebuild" "${report}"

@@ -150,9 +150,11 @@ The smoke test checks, on the real stack:
 - a rerun with nothing new, and a replay of the same events, recompute nothing and leave every day's compute time unchanged;
 - late events from two days earlier plus an event corrected onto another day recompute exactly the days they touch (2025-12-28, 2025-12-29, and 2026-01-01, which the corrected event left) and leave 2025-12-31 with its original compute time;
 - `--day 2025-12-29` recomputes that day, leaves 2025-12-28, 2025-12-31 and 2026-01-01 with their compute times, and the totals still reconcile;
-- wiping gold and running it again rebuilds all four days from silver and reconciles.
+- wiping gold together with the change markers (the state of a lake built by an older silver job) and running it again recreates the missing table and rebuilds all four days from silver, and it reconciles.
 
 A change marker from a silver run that has not finished is ignored; that was checked by hand (a marker dated after silver's last completed run), not in the smoke test.
+
+**One writer at a time.** Silver and gold each assume they are the only writer: do not run two silver jobs, two gold jobs, or a `--day` backfill alongside a normal gold run. Overlapping runs can leave gold stale, because the progress markers assume runs finish in order. The scheduler (Airflow, issue #12) is where that is enforced, with one active run per job and gold after silver.
 
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
