@@ -101,12 +101,31 @@ docker compose -f docker/compose.hadoop.yml up -d --wait && docker compose -f do
 scripts/kafka-smoke.sh            # creates the cdr.raw topic (auto-creation is off, so nothing else will)
 scripts/bronze-stream.sh --once   # ingest what is in Kafka now on YARN, then stop; without --once it runs until Ctrl-C
 scripts/bronze-smoke.sh           # about 2 minutes: bronze rows equal Kafka messages after a load, a second load and a rerun
-scripts/bronze-reset.sh           # delete the table and checkpoint and recreate an empty cdr.raw (they must be reset together)
+scripts/lake-reset.sh             # delete every lake table and checkpoint and recreate an empty cdr.raw (they must be reset together)
 ```
 
-The table, its checkpoint and the Kafka topic belong together: if you delete the Kafka volume or recreate `cdr.raw`, run `scripts/bronze-reset.sh` too, or bronze would resume from the old topic's offsets.
+The table, its checkpoint and the Kafka topic belong together: if you delete the Kafka volume or recreate `cdr.raw`, run `scripts/lake-reset.sh` too, or bronze would resume from the old topic's offsets.
 
 **Restart safety.** The job keeps a checkpoint on HDFS (`/checkpoints/bronze_cdr_raw`) of which Kafka offsets Iceberg has already committed, and each micro-batch is one atomic Iceberg commit. A stop or a crash therefore resumes from the last commit. The smoke test checks that bronze holds exactly one row per Kafka message (rows equal Kafka's total end offsets, and distinct `(partition, offset)` pairs equal rows). It was also checked by hard-stopping (SIGKILL) the driver while the generator was still producing: Kafka held 9,883 messages at the crash and bronze was 338 behind; after the restart bronze held exactly 10,598 rows for 10,598 messages.
+
+## Silver layer: clean, deduplicated, masked
+A Spark batch job (`spark_jobs/silver_cdr.py`, run on YARN) builds `lake.silver.cdr` from bronze: one typed row per `event_id`, partitioned by day of `event_time`.
+
+```bash
+scripts/spark-yarn.sh silver_cdr.py          # process the bronze data added since the last run; --full reads all of bronze again
+scripts/silver-smoke.sh                      # about 4 minutes, starts from an empty lake (runs lake-reset.sh): checks everything below
+MSISDN_SALT=... scripts/spark-yarn.sh silver_cdr.py   # the salt for the phone-number hashes; the default is a local dev value
+```
+
+| Rule | What silver does |
+|---|---|
+| Deduplicate | One row per `event_id`. An exact re-send changes nothing; a correction (same `event_id`, later `emitted_at`) replaces the original. |
+| Validate | A record must be valid JSON with an `event_id`, a known type (`VOICE`, `SMS`, `DATA`), a Bangladesh mobile number (`+8801` and 9 digits), a counterparty for voice and SMS, a non-blank cell, no phone number inside `event_id` or `cell_id` (both are copied to silver as they are), parseable times with `event_time` not after `emitted_at`, and sensible duration, segments, bytes and charge. Failures go to `lake.silver.cdr_rejected` with the reason (`invalid msisdn`, `invalid duration`, ...), keyed by Kafka partition and offset so a rerun does not add them twice. The payload is not copied there, because it holds raw phone numbers; find the original in bronze by partition and offset. A truncated or otherwise malformed record is rejected; text after a complete, valid JSON object is ignored. |
+| Mask phone numbers | A number never reaches silver or the quarantine table. Each becomes a salted SHA-256 hash (to count per subscriber and join) and a masked form (`+88010******34`). The smoke test scans every string column of both tables for any number in the accepted format and finds none. |
+| Late events | No special case: a row goes to the partition of its `event_time`, whenever it arrives, and replaces an older copy of itself if it is newer, even if the correction also changes `event_time` (the row moves to the new day). Silver has no watermark, so nothing is dropped for being late. |
+| Incremental | The job reads only the bronze snapshots added since its last run (`lake.silver.progress` holds the last snapshot) and `MERGE`s them on `event_id`. The merge has to look at all of silver, because a correction can change `event_time`; narrowing it by time is a possible later optimisation for the performance work, if event time is made immutable. If the job stops before saving its progress, the next run reads the same snapshots and reaches the same result. |
+
+The smoke test uses 1,000 generated events, 6 deliberately bad records (including a blank cell and a phone number inside an `event_id`) and one event that is corrected later, then checks: 1,001 silver rows and 1,001 distinct ids; the 6 bad records quarantined with the right reasons; silver equal to the latest copy of every event in bronze (the run includes 7 corrected events); a rerun that finds nothing new; a replay of the same events that grows bronze but not silver; and 500 events dated two days earlier that land in their own day's partitions with no duplicates. The late event "fix-time" is corrected in a later batch with a different `event_time` on a different day, and silver still holds a single row, with the corrected values, on the new day.
 
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
@@ -114,9 +133,9 @@ each part is built; planned approach in italics.
 
 | Question | Approach |
 |---|---|
-| Reruns | *Writes are idempotent: Iceberg `MERGE` keyed on `event_id`; streaming uses checkpoints.* |
-| Duplicates | *Deduplicate on `event_id` in silver.* |
-| Late data | *Watermark in streaming; silver upserts late events into the right partition.* |
+| Reruns | Bronze: a checkpoint plus atomic Iceberg commits, so a restart resumes without loss or duplicates (tested with a hard kill). Silver: `MERGE` on `event_id` that only replaces a row with a later copy, so a rerun or a replay of the same events changes nothing (tested). |
+| Duplicates | Bronze keeps every copy as received. Silver keeps one row per `event_id`, the latest `emitted_at` winning, so corrections beat originals (tested). |
+| Late data | Silver is a batch `MERGE` with no watermark: a late event is upserted into the partition of its `event_time` however late it is (tested with events two days late). Gold will recompute the days a batch touched. |
 | Backfill | *Reprocess one date partition at a time with partition overwrite, without touching other days.* |
 | 100x volume | *Partition by event date, compact small files, scale Kafka partitions and Spark executors; documented with measured timings.* |
 
@@ -158,4 +177,4 @@ Hadoop cluster, Kafka events, bronze layer, silver and gold, orchestration and
 shell, reporting and performance, wrap-up.
 
 ## Status
-In build. Running and tested: HDFS and YARN, Spark on YARN, Kafka (KRaft), the CDR generator, and the Kafka to Iceberg bronze layer. Next: silver (dedupe, validation, masking, late data) and gold.
+In build. Running and tested: HDFS and YARN, Spark on YARN, Kafka (KRaft), the CDR generator, the Kafka to Iceberg bronze layer, and the silver layer (deduplicated, validated, masked). Next: gold tables, then a safe one-day backfill.
