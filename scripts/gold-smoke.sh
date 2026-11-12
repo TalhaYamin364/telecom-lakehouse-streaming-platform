@@ -38,30 +38,34 @@ reconcile() {  # reconcile <label> <report>: every gold total equals the same to
   expect "${label}" SUBSCRIBER_MISMATCH "$(value SUBSCRIBER_MISMATCH "${report}")" 0
 }
 
-echo "1/7 start from an empty lake"
+echo "1/8 start from an empty lake"
 scripts/lake-reset.sh > /dev/null
 
-echo "2/7 generate 1000 events and one event to be corrected later, build bronze and silver, then gold"
+echo "2/8 generate 1000 events, one event with stray fields and one to be corrected later, build bronze and silver, then gold"
 total="$(generate 1000 8201)"
+# A DATA event that also carries a duration and SMS segments: silver accepts it (they are not validated for DATA),
+# and gold must not count them as call seconds or SMS segments.
+produce_raw '{"event_id":"stray-fields","event_type":"DATA","msisdn":"+8801000000004","cell_id":"DHK-0001","event_time":"2026-01-01T00:00:20.000Z","emitted_at":"2026-01-01T00:00:21.000Z","duration_sec":60,"sms_segments":9,"bytes_up":5,"bytes_down":6,"charge_paisa":7}'
 fix_time_original
 ingest
 gold
 report="$(gold_check)"; grep -E '^(SILVER_ROWS|DAYS)' <<< "${report}" | cut -c1-200 | indent
-expect "first build" SILVER_ROWS "$(value SILVER_ROWS "${report}")" "$((total + 1))"
+expect "first build" SILVER_ROWS "$(value SILVER_ROWS "${report}")" "$((total + 2))"
+[ "$(value SILVER_STRAY_VOICE "${report}")" -gt 0 ] || fail "the stray-field event did not reach silver, so the per-type sums were not tested"
 reconcile "first build" "${report}"
 days1="$(value DAYS "${report}")"
 
-echo "3/7 rerun gold with nothing new: nothing is recomputed"
+echo "3/8 rerun gold with nothing new: nothing is recomputed"
 gold | grep -q 'nothing to do' || fail "gold recomputed days although silver did not change"
 expect "rerun" DAYS "$(value DAYS "$(gold_check)")" "${days1}"
 
-echo "4/7 replay the same events: silver does not change, so gold does not either"
+echo "4/8 replay the same events: silver does not change, so gold does not either"
 generate 1000 8201 > /dev/null
 ingest
 gold | grep -q 'nothing to do' || fail "gold recomputed days after a replay that changed nothing"
 expect "replay" DAYS "$(value DAYS "$(gold_check)")" "${days1}"
 
-echo "5/7 late events from two days earlier arrive and one event is corrected onto another day: only the touched days are recomputed"
+echo "5/8 late events from two days earlier arrive and one event is corrected onto another day: only the touched days are recomputed"
 generate 500 8202 2025-12-29T00:00:00Z > /dev/null
 fix_time_correction
 ingest
@@ -74,7 +78,7 @@ expect "untouched day" "computed_at of 2025-12-31" "$(computed_at "${days2}" 202
   || fail "2026-01-01 was not recomputed although the corrected event moved off it"
 [ -n "$(computed_at "${days2}" 2025-12-29)" ] || fail "no gold rows for 2025-12-29 after the late events"
 
-echo "6/7 backfill one day with --day: that day is recomputed, every other day is left alone, nothing is duplicated"
+echo "6/8 backfill one day with --day: that day is recomputed, every other day is left alone, nothing is duplicated"
 gold --day 2025-12-29
 report="$(gold_check)"
 reconcile "backfill" "${report}"
@@ -84,7 +88,16 @@ for day in 2025-12-28 2025-12-31 2026-01-01; do
   expect "backfill leaves other days alone" "computed_at of ${day}" "$(computed_at "${days3}" "${day}")" "$(computed_at "${days2}" "${day}")"
 done
 
-echo "7/7 the tables are partitioned by day in HDFS"
+echo "7/8 wipe gold and rebuild it from silver: the first run builds every day silver has, even with no change markers for them"
+docker compose -f docker/compose.hadoop.yml exec -T namenode hdfs dfs -rm -r -f /warehouse/gold > /dev/null
+rebuilt="$(gold)"; echo "${rebuilt}" | indent
+report="$(gold_check)"
+reconcile "rebuild" "${report}"
+for day in 2025-12-28 2025-12-29 2025-12-31 2026-01-01; do
+  [ -n "$(computed_at "$(value DAYS "${report}")" "${day}")" ] || fail "rebuild did not build ${day}"
+done
+
+echo "8/8 the tables are partitioned by day in HDFS"
 listing="$(docker compose -f docker/compose.hadoop.yml exec -T namenode hdfs dfs -ls /warehouse/gold/daily_usage_per_subscriber/data)"  # not piped into grep -q: it exits early and the pipe breaks
 grep -q 'usage_date=2025-12-29' <<< "${listing}" || fail "no usage_date=2025-12-29 folder under /warehouse/gold/daily_usage_per_subscriber/data"
 

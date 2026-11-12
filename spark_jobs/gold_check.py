@@ -18,9 +18,15 @@ def line(prefix, row):
 
 
 silver = spark.table(SILVER)
-s = totals(silver, rows="count(*)", charge="sum(charge_paisa)", voice="sum(duration_sec)", sms="sum(sms_segments)",
-           bytes="sum(bytes_up + bytes_down)", calls="sum(case when event_type = 'VOICE' then 1 else 0 end)",
-           texts="sum(case when event_type = 'SMS' then 1 else 0 end)", sessions="sum(case when event_type = 'DATA' then 1 else 0 end)")
+# Each metric counts for its own event type only; silver keeps stray values on other types, which gold must ignore.
+s = totals(silver, rows="count(*)", charge="sum(charge_paisa)",
+           voice="sum(case when event_type = 'VOICE' then duration_sec else 0 end)",
+           sms="sum(case when event_type = 'SMS' then sms_segments else 0 end)",
+           bytes="sum(case when event_type = 'DATA' then bytes_up + bytes_down else 0 end)",
+           calls="sum(case when event_type = 'VOICE' then 1 else 0 end)",
+           texts="sum(case when event_type = 'SMS' then 1 else 0 end)", sessions="sum(case when event_type = 'DATA' then 1 else 0 end)",
+           stray_voice="sum(case when event_type <> 'VOICE' then coalesce(duration_sec, 0) else 0 end)",
+           stray_sms="sum(case when event_type <> 'SMS' then coalesce(sms_segments, 0) else 0 end)")
 usage = spark.table(USAGE)
 u = totals(usage, rows="sum(events)", charge="sum(charge_paisa)", voice="sum(voice_seconds)", sms="sum(sms_segments)",
            bytes="sum(data_bytes_up + data_bytes_down)", calls="sum(voice_calls)", texts="sum(sms_count)", sessions="sum(data_sessions)")

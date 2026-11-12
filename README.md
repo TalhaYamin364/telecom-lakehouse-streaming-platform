@@ -142,13 +142,17 @@ scripts/spark-yarn.sh gold_daily.py --day 2026-01-01      # backfill: recompute 
 scripts/gold-smoke.sh                                     # about 5 minutes, starts from an empty lake (runs lake-reset.sh)
 ```
 
-**How it stays correct and safe to rerun.** A day is always recomputed from silver in full, never added to, and the result replaces that day's rows in one atomic Iceberg overwrite. A rerun, a replay or a crash halfway therefore gives the same numbers and never duplicates a row. Silver records which days each run changed in `lake.silver.changed_days` before it merges, including the day a corrected event moved away from; gold recomputes exactly those days, and a replay that changes nothing in silver changes nothing in gold. `--day` is the backfill: it recomputes the days you name and leaves every other day, and gold's progress record, alone.
+**How it stays correct and safe to rerun.** A day is always recomputed from silver in full, never added to, and the result replaces that day's rows in one atomic Iceberg overwrite. A rerun, a replay or a crash halfway therefore gives the same numbers and never duplicates a row. Silver records which days each run changed in `lake.silver.changed_days` before it merges, including the day a corrected event moved away from; gold recomputes exactly those days, and a replay that changes nothing in silver changes nothing in gold. Gold only acts on markers from a silver run that has finished (silver saves its progress last), so it never publishes a half-finished run and then moves past it. On its very first run, for instance on a lake where silver already holds data or after gold was wiped, gold builds every day silver has. `--day` is the backfill: it recomputes the days you name and leaves every other day, and gold's progress record, alone. Each metric is summed over its own event type only (call seconds over voice calls, SMS segments over texts, bytes over data sessions), because silver keeps stray values on other types.
 
 The smoke test checks, on the real stack:
 - gold reconciles with silver: row, charge, call-second, SMS and byte totals agree for all three tables, calls, texts and data sessions agree by type, per-day subscriber counts agree, and no table has two rows for one key;
+- a data event that carries a stray `duration_sec` and `sms_segments` reaches silver, and gold does not count them as call seconds or SMS segments;
 - a rerun with nothing new, and a replay of the same events, recompute nothing and leave every day's compute time unchanged;
 - late events from two days earlier plus an event corrected onto another day recompute exactly the days they touch (2025-12-28, 2025-12-29, and 2026-01-01, which the corrected event left) and leave 2025-12-31 with its original compute time;
-- `--day 2025-12-29` recomputes that day, leaves 2025-12-28, 2025-12-31 and 2026-01-01 with their compute times, and the totals still reconcile.
+- `--day 2025-12-29` recomputes that day, leaves 2025-12-28, 2025-12-31 and 2026-01-01 with their compute times, and the totals still reconcile;
+- wiping gold and running it again rebuilds all four days from silver and reconciles.
+
+A change marker from a silver run that has not finished is ignored; that was checked by hand (a marker dated after silver's last completed run), not in the smoke test.
 
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
