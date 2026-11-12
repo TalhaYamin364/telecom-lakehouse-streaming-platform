@@ -10,9 +10,19 @@ silver = spark.table(SILVER)
 rows = silver.count()
 distinct_ids = silver.select("event_id").distinct().count()
 
-# Any raw phone number in any string column of silver would be a privacy leak.
-raw_number = "[+]88010[0-9]{8}"
-leaks = silver.where(" OR ".join(f"{c} RLIKE '{raw_number}'" for c, t in silver.dtypes if t == "string")).count()
+# Any raw phone number in any string column of silver or the quarantine table would be a privacy leak.
+# This is the format silver accepts (+8801 and nine digits), not just the generator's prefix, and it is not anchored,
+# so a number embedded in a longer string is found too.
+raw_number = "[+]8801[0-9]{9}"
+
+
+def leaked(table):
+    string_columns = [c for c, t in table.dtypes if t == "string"]
+    return table.where(" OR ".join(f"{c} RLIKE '{raw_number}'" for c in string_columns)).count() if string_columns else 0
+
+
+rejected_table = spark.table(REJECTED)
+leaks = leaked(silver) + leaked(rejected_table)
 
 # The copy with the latest emitted_at in bronze must be what silver holds.
 bronze = parse(spark.table(BRONZE)).where("reason IS NULL")
@@ -25,7 +35,10 @@ mismatch = (
 corrected = bronze.groupBy("event_id").agg(F.countDistinct("charge_paisa").alias("c")).where("c > 1").count()
 
 days = [r.d for r in silver.select(F.date_format("event_time", "yyyy-MM-dd").alias("d")).distinct().orderBy("d").collect()]
-reasons = {r.reason: r["count"] for r in spark.table(REJECTED).groupBy("reason").count().collect()}
+reasons = {r.reason: r["count"] for r in rejected_table.groupBy("reason").count().collect()}
+fix = silver.where("event_id = 'fix-time'")  # the smoke test sends this event twice, the second time with a different event_time
+fix_row = fix.select("charge_paisa", F.date_format("event_time", "yyyy-MM-dd").alias("d")).first()
 print(f"SILVER_ROWS={rows} DISTINCT_IDS={distinct_ids} LEAKED_NUMBERS={leaks} LATEST_MISMATCH={mismatch} CORRECTED_IDS={corrected}")
+print(f"FIXTIME_ROWS={fix.count()} FIXTIME_CHARGE={fix_row.charge_paisa if fix_row else 'none'} FIXTIME_DAY={fix_row.d if fix_row else 'none'}")
 print(f"SUBSCRIBERS={silver.select('subscriber_hash').distinct().count()} DAYS={','.join(days)}")
 print("REJECTED=" + str(sum(reasons.values())) + " REASONS=" + ",".join(f"{k}:{v}" for k, v in sorted(reasons.items())))

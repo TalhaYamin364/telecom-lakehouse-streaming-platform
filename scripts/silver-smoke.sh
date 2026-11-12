@@ -20,19 +20,33 @@ generate() {  # generate <count> <seed> [start]; prints how many distinct events
   sed -n 's/^sent to cdr.raw: \([0-9]*\) new.*/\1/p' <<< "${out}"
 }
 
-inject_bad_records() {  # four records that must be quarantined, each breaking a different rule
-  printf '%s\n' \
+produce_raw() {  # one Kafka message per argument, exactly as given
+  printf '%s\n' "$@" | "${kafka[@]}" exec -T kafka /opt/kafka/bin/kafka-console-producer.sh \
+    --bootstrap-server localhost:19092 --topic cdr.raw > /dev/null
+}
+
+inject_bad_records() {  # five records that must be quarantined, each breaking a different rule
+  produce_raw \
     'this is not json' \
     '{"event_id":"bad-msisdn","event_type":"VOICE","msisdn":"+8801234","counterparty_msisdn":"+88010000000001","cell_id":"DHK-0001","event_time":"2026-01-01T00:00:00.000Z","emitted_at":"2026-01-01T00:00:01.000Z","duration_sec":10,"charge_paisa":20}' \
     '{"event_id":"bad-duration","event_type":"VOICE","msisdn":"+8801000000001","counterparty_msisdn":"+8801000000002","cell_id":"DHK-0001","event_time":"2026-01-01T00:00:00.000Z","emitted_at":"2026-01-01T00:00:01.000Z","duration_sec":-5,"charge_paisa":20}' \
     '{"event_id":"bad-type","event_type":"FAX","msisdn":"+8801000000001","cell_id":"DHK-0001","event_time":"2026-01-01T00:00:00.000Z","emitted_at":"2026-01-01T00:00:01.000Z","charge_paisa":20}' \
-    | "${kafka[@]}" exec -T kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:19092 --topic cdr.raw > /dev/null
+    '{"event_id":"bad-cell","event_type":"DATA","msisdn":"+8801000000001","cell_id":"  ","event_time":"2026-01-01T00:00:00.000Z","emitted_at":"2026-01-01T00:00:01.000Z","bytes_up":1,"bytes_down":1,"charge_paisa":1}'
+}
+
+# An event and a later correction of it that also changes event_time. They arrive in different batches, and the
+# correction's day is outside the batch's time range, so a merge limited to that range would insert a second row.
+fix_time_original() {
+  produce_raw '{"event_id":"fix-time","event_type":"DATA","msisdn":"+8801000000003","cell_id":"DHK-0001","event_time":"2026-01-01T00:00:50.000Z","emitted_at":"2026-01-01T00:00:51.000Z","bytes_up":1,"bytes_down":2,"charge_paisa":10}'
+}
+fix_time_correction() {
+  produce_raw '{"event_id":"fix-time","event_type":"DATA","msisdn":"+8801000000003","cell_id":"DHK-0001","event_time":"2025-12-29T00:00:30.000Z","emitted_at":"2026-01-01T00:10:00.000Z","bytes_up":1,"bytes_down":2,"charge_paisa":99}'
 }
 
 # shellcheck disable=SC2016  # single-quoted on purpose: $(ls ...) must expand inside the container
 silver_check() {
   "${spark[@]}" bash -c '/opt/spark/bin/spark-submit --master "local[1]" --jars "$(ls /opt/extra-jars/*.jar | paste -sd, -)" \
-    --driver-memory 768m /opt/spark_jobs/silver_check.py' 2>&1 | grep -E '^(SILVER_ROWS|SUBSCRIBERS|REJECTED)'
+    --driver-memory 768m /opt/spark_jobs/silver_check.py' 2>&1 | grep -E '^(SILVER_ROWS|FIXTIME_ROWS|SUBSCRIBERS|REJECTED)'
 }
 
 value() {  # value KEY "text with KEY=value pairs"
@@ -51,16 +65,18 @@ expect() {  # expect <label> <name> <actual> <wanted>
 echo "1/6 start from an empty lake"
 scripts/lake-reset.sh > /dev/null
 
-echo "2/6 generate 1000 events and 4 bad records, then build bronze and silver"
+echo "2/6 generate 1000 events, 5 bad records and one event to be corrected later, then build bronze and silver"
 total="$(generate 1000 7001)"
 inject_bad_records
+fix_time_original
 ingest
 report="$(silver_check)"; indent <<< "${report}"
-expect "first build" SILVER_ROWS "$(value SILVER_ROWS "${report}")" "${total}"
-expect "first build" DISTINCT_IDS "$(value DISTINCT_IDS "${report}")" "${total}"
+expect "first build" SILVER_ROWS "$(value SILVER_ROWS "${report}")" "$((total + 1))"
+expect "first build" DISTINCT_IDS "$(value DISTINCT_IDS "${report}")" "$((total + 1))"
 expect "first build" LEAKED_NUMBERS "$(value LEAKED_NUMBERS "${report}")" 0
 expect "first build" LATEST_MISMATCH "$(value LATEST_MISMATCH "${report}")" 0
-expect "first build" REJECTED "$(value REJECTED "${report}")" 4
+expect "first build" REJECTED "$(value REJECTED "${report}")" 5
+expect "first build" FIXTIME_CHARGE "$(value FIXTIME_CHARGE "${report}")" 10
 [ "$(value CORRECTED_IDS "${report}")" -gt 0 ] || fail "no corrected events were generated, so latest-wins was not tested"
 
 echo "3/6 rerun silver with nothing new: nothing changes"
@@ -70,15 +86,20 @@ expect "rerun" report "$(silver_check)" "${report}"
 echo "4/6 replay the same events (same seed): bronze grows, silver does not"
 generate 1000 7001 > /dev/null
 ingest
-expect "replay" SILVER_ROWS "$(value SILVER_ROWS "$(silver_check)")" "${total}"
+expect "replay" SILVER_ROWS "$(value SILVER_ROWS "$(silver_check)")" "$((total + 1))"
 
-echo "5/6 events from two days earlier arrive late: they land in that day's partition, silver has no duplicates"
+echo "5/6 events from two days earlier arrive late, and the 'fix-time' event is corrected with a different event_time"
 more="$(generate 500 7002 2025-12-29T00:00:00Z)"
+fix_time_correction
 ingest
 report="$(silver_check)"; indent <<< "${report}"
-expect "late events" SILVER_ROWS "$(value SILVER_ROWS "${report}")" "$((total + more))"
-expect "late events" DISTINCT_IDS "$(value DISTINCT_IDS "${report}")" "$((total + more))"
+expect "late events" SILVER_ROWS "$(value SILVER_ROWS "${report}")" "$((total + more + 1))"
+expect "late events" DISTINCT_IDS "$(value DISTINCT_IDS "${report}")" "$((total + more + 1))"
 expect "late events" LATEST_MISMATCH "$(value LATEST_MISMATCH "${report}")" 0
+expect "late events" LEAKED_NUMBERS "$(value LEAKED_NUMBERS "${report}")" 0
+expect "corrected event_time" FIXTIME_ROWS "$(value FIXTIME_ROWS "${report}")" 1
+expect "corrected event_time" FIXTIME_CHARGE "$(value FIXTIME_CHARGE "${report}")" 99
+expect "corrected event_time" FIXTIME_DAY "$(value FIXTIME_DAY "${report}")" 2025-12-29
 grep -q '2025-12-29' <<< "$(value DAYS "${report}")" || fail "no 2025-12-29 partition after the late events: $(value DAYS "${report}")"
 
 echo "6/6 the table is partitioned by event day in HDFS"

@@ -66,7 +66,7 @@ def create_tables(spark):
     """)
     spark.sql(f"""
         CREATE TABLE IF NOT EXISTS {REJECTED} (
-            kafka_partition INT, kafka_offset BIGINT, reason STRING, raw_value STRING, processed_at TIMESTAMP
+            kafka_partition INT, kafka_offset BIGINT, reason STRING, processed_at TIMESTAMP
         ) USING iceberg
     """)
     spark.sql(f"CREATE TABLE IF NOT EXISTS {PROGRESS} (source STRING, snapshot_id BIGINT, updated_at TIMESTAMP) USING iceberg")
@@ -80,7 +80,7 @@ def rejection_reason(row):
         ("unknown event_type", ~F.col("event_type").isin(*EVENT_TYPES)),
         ("invalid msisdn", ~F.col("msisdn").rlike(MSISDN)),
         ("invalid counterparty", F.col("event_type").isin("VOICE", "SMS") & ~F.col("counterparty_msisdn").rlike(MSISDN)),
-        ("missing cell_id", F.col("cell_id").isNull()),
+        ("missing cell_id", F.col("cell_id").isNull() | (F.trim(F.col("cell_id")) == "")),
         ("invalid event_time", F.col("event_ts").isNull()),
         ("invalid emitted_at", F.col("emitted_ts").isNull()),
         ("event_time after emitted_at", F.col("event_ts") > F.col("emitted_ts")),
@@ -148,8 +148,9 @@ def main():
 
     flat = parse(reader.load(BRONZE)).cache()
 
+    # The payload is not copied here: it holds raw phone numbers, and the original stays available in bronze by partition and offset.
     flat.where("reason IS NOT NULL").select(
-        "kafka_partition", "kafka_offset", "reason", "raw_value", F.current_timestamp().alias("processed_at")
+        "kafka_partition", "kafka_offset", "reason", F.current_timestamp().alias("processed_at")
     ).createOrReplaceTempView("rejected_batch")
     spark.sql(f"""
         MERGE INTO {REJECTED} t USING rejected_batch s
@@ -157,21 +158,15 @@ def main():
         WHEN NOT MATCHED THEN INSERT *
     """)
 
-    batch = latest_per_event(mask_and_shape(flat.where("reason IS NULL"), salt)).cache()
-    bounds = batch.agg(
-        F.date_format(F.min("event_time"), "yyyy-MM-dd HH:mm:ss.SSSSSS").alias("lo"),
-        F.date_format(F.max("event_time"), "yyyy-MM-dd HH:mm:ss.SSSSSS").alias("hi"),
-    ).first()
-    if bounds.lo is not None:
-        batch.createOrReplaceTempView("silver_batch")
-        # Every copy of an event has the same event_time, so the target scan can be limited to the batch's time range.
-        spark.sql(f"""
-            MERGE INTO {SILVER} t USING silver_batch s
-            ON t.event_id = s.event_id
-               AND t.event_time >= TIMESTAMP '{bounds.lo}' AND t.event_time <= TIMESTAMP '{bounds.hi}'
-            WHEN MATCHED AND s.emitted_at > t.emitted_at THEN UPDATE SET *
-            WHEN NOT MATCHED THEN INSERT *
-        """)
+    batch = latest_per_event(mask_and_shape(flat.where("reason IS NULL"), salt))
+    batch.createOrReplaceTempView("silver_batch")
+    # Match on event_id alone: a correction may change event_time, so the match must not be limited to a time range.
+    spark.sql(f"""
+        MERGE INTO {SILVER} t USING silver_batch s
+        ON t.event_id = s.event_id
+        WHEN MATCHED AND s.emitted_at > t.emitted_at THEN UPDATE SET *
+        WHEN NOT MATCHED THEN INSERT *
+    """)
 
     spark.sql(f"""
         MERGE INTO {PROGRESS} t
