@@ -20,6 +20,7 @@ BRONZE = "lake.bronze.cdr_raw"
 SILVER = "lake.silver.cdr"
 REJECTED = "lake.silver.cdr_rejected"
 PROGRESS = "lake.silver.progress"
+CHANGED_DAYS = "lake.silver.changed_days"  # which event days a run changed; the gold layer recomputes exactly those days
 
 MSISDN = r"^\+8801[0-9]{9}$"  # Bangladesh mobile number in international form
 PHONE_ANYWHERE = r"\+8801[0-9]{9}"  # the same format, found anywhere inside a longer string
@@ -71,6 +72,7 @@ def create_tables(spark):
         ) USING iceberg
     """)
     spark.sql(f"CREATE TABLE IF NOT EXISTS {PROGRESS} (source STRING, snapshot_id BIGINT, updated_at TIMESTAMP) USING iceberg")
+    spark.sql(f"CREATE TABLE IF NOT EXISTS {CHANGED_DAYS} (day DATE, changed_at TIMESTAMP) USING iceberg")
 
 
 def rejection_reason(row):
@@ -126,6 +128,25 @@ def latest_per_event(df):
     return df.withColumn("rn", F.row_number().over(w)).where("rn = 1").drop("rn")
 
 
+def record_changed_days(spark, batch):
+    """Note which event days this batch will change, before the merge changes them.
+
+    A day is changed by a new event, by a correction (later emitted_at), and also by the day a corrected event
+    moved away from. An exact re-send changes nothing and is not recorded. Recording first means a crash can only
+    cause an unnecessary recompute, never a missed one: after the merge the rows would no longer look new.
+    """
+    existing = spark.table(SILVER).select(
+        "event_id", F.col("event_time").alias("old_time"), F.col("emitted_at").alias("old_emitted_at"))
+    changes = batch.join(existing, "event_id", "left").where("old_emitted_at IS NULL OR emitted_at > old_emitted_at")
+    days = (
+        changes.select(F.to_date("event_time").alias("day"))
+        .union(changes.where("old_time IS NOT NULL").select(F.to_date("old_time").alias("day")))
+        .distinct()
+        .withColumn("changed_at", F.current_timestamp())
+    )
+    days.writeTo(CHANGED_DAYS).append()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--full", action="store_true", help="read all of bronze again instead of only what is new")
@@ -162,6 +183,7 @@ def main():
     """)
 
     batch = latest_per_event(mask_and_shape(flat.where("reason IS NULL"), salt))
+    record_changed_days(spark, batch)
     batch.createOrReplaceTempView("silver_batch")
     # Match on event_id alone: a correction may change event_time, so the match must not be limited to a time range.
     spark.sql(f"""

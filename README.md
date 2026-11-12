@@ -127,6 +127,29 @@ MSISDN_SALT=... scripts/spark-yarn.sh silver_cdr.py   # the salt for the phone-n
 
 The smoke test uses 1,000 generated events, 6 deliberately bad records (including a blank cell and a phone number inside an `event_id`) and one event that is corrected later, then checks: 1,001 silver rows and 1,001 distinct ids; the 6 bad records quarantined with the right reasons; silver equal to the latest copy of every event in bronze (the run includes 7 corrected events); a rerun that finds nothing new; a replay of the same events that grows bronze but not silver; and 500 events dated two days earlier that land in their own day's partitions with no duplicates. The late event "fix-time" is corrected in a later batch with a different `event_time` on a different day, and silver still holds a single row, with the corrected values, on the new day.
 
+## Gold layer: daily KPIs
+A Spark batch job (`spark_jobs/gold_daily.py`, run on YARN) turns silver into three tables, all partitioned by `usage_date`:
+
+| Table | One row per | Holds |
+|---|---|---|
+| `lake.gold.daily_usage_per_subscriber` | subscriber (hash) per day | events, calls and call seconds, SMS count and segments, data sessions and bytes up and down, charge |
+| `lake.gold.revenue_by_event_type` | event type per day | events and charge (in paisa) |
+| `lake.gold.cell_traffic` | cell per day | events, distinct subscribers, call seconds, SMS segments, data bytes, charge |
+
+```bash
+scripts/spark-yarn.sh gold_daily.py                       # recompute the days silver has changed since the last run
+scripts/spark-yarn.sh gold_daily.py --day 2026-01-01      # backfill: recompute exactly this day (repeat --day for several), touch nothing else
+scripts/gold-smoke.sh                                     # about 5 minutes, starts from an empty lake (runs lake-reset.sh)
+```
+
+**How it stays correct and safe to rerun.** A day is always recomputed from silver in full, never added to, and the result replaces that day's rows in one atomic Iceberg overwrite. A rerun, a replay or a crash halfway therefore gives the same numbers and never duplicates a row. Silver records which days each run changed in `lake.silver.changed_days` before it merges, including the day a corrected event moved away from; gold recomputes exactly those days, and a replay that changes nothing in silver changes nothing in gold. `--day` is the backfill: it recomputes the days you name and leaves every other day, and gold's progress record, alone.
+
+The smoke test checks, on the real stack:
+- gold reconciles with silver: row, charge, call-second, SMS and byte totals agree for all three tables, calls, texts and data sessions agree by type, per-day subscriber counts agree, and no table has two rows for one key;
+- a rerun with nothing new, and a replay of the same events, recompute nothing and leave every day's compute time unchanged;
+- late events from two days earlier plus an event corrected onto another day recompute exactly the days they touch (2025-12-28, 2025-12-29, and 2026-01-01, which the corrected event left) and leave 2025-12-31 with its original compute time;
+- `--day 2025-12-29` recomputes that day, leaves 2025-12-28, 2025-12-31 and 2026-01-01 with their compute times, and the totals still reconcile.
+
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
 each part is built; planned approach in italics.
@@ -135,8 +158,8 @@ each part is built; planned approach in italics.
 |---|---|
 | Reruns | Bronze: a checkpoint plus atomic Iceberg commits, so a restart resumes without loss or duplicates (tested with a hard kill). Silver: `MERGE` on `event_id` that only replaces a row with a later copy, so a rerun or a replay of the same events changes nothing (tested). |
 | Duplicates | Bronze keeps every copy as received. Silver keeps one row per `event_id`, the latest `emitted_at` winning, so corrections beat originals (tested). |
-| Late data | Silver is a batch `MERGE` with no watermark: a late event is upserted into the partition of its `event_time` however late it is (tested with events two days late). Gold will recompute the days a batch touched. |
-| Backfill | *Reprocess one date partition at a time with partition overwrite, without touching other days.* |
+| Late data | Silver is a batch `MERGE` with no watermark: a late event is upserted into the partition of its `event_time` however late it is (tested with events two days late). Silver records the days each batch changed, and gold recomputes exactly those days (tested), so late and corrected events reach the KPIs. |
+| Backfill | Reprocess one day at a time: `gold_daily.py --day D` recomputes that day from silver and replaces its rows in one atomic overwrite, leaving every other day and the progress record alone (tested: other days keep their compute time, totals still reconcile, no duplicates). |
 | 100x volume | *Partition by event date, compact small files, scale Kafka partitions and Spark executors; documented with measured timings.* |
 
 ## Versions
@@ -177,4 +200,4 @@ Hadoop cluster, Kafka events, bronze layer, silver and gold, orchestration and
 shell, reporting and performance, wrap-up.
 
 ## Status
-In build. Running and tested: HDFS and YARN, Spark on YARN, Kafka (KRaft), the CDR generator, the Kafka to Iceberg bronze layer, and the silver layer (deduplicated, validated, masked). Next: gold tables, then a safe one-day backfill.
+In build. Running and tested: HDFS and YARN, Spark on YARN, Kafka (KRaft), the CDR generator, the Kafka to Iceberg bronze layer, the silver layer (deduplicated, validated, masked) and the gold KPI tables with a one-day backfill. Next: shell scripts and Airflow, a dashboard, and performance work.
