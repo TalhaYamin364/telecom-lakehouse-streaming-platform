@@ -190,6 +190,21 @@ A change marker from a silver run that has not finished is ignored; that was che
 
 **One writer at a time.** Silver and gold each assume they are the only writer: do not run two silver jobs, two gold jobs, or a `--day` backfill alongside a normal gold run. Overlapping runs can leave gold stale, because the progress markers assume runs finish in order. Airflow enforces that (see "Schedule it with Airflow"): one active run and a one-slot pool, with gold after silver. Outside Airflow it is up to you.
 
+## Testing
+What is tested, and how. The first four run on every pull request; the smoke tests need the whole stack, so they run on a laptop.
+
+| What | How | In CI |
+|---|---|---|
+| Generator (events, duplicates, late copies, producer) | 32 unit tests, standard library only: `cd generator && python3 -m unittest` | Yes |
+| DAGs | 6 tests: both load, bronze then silver then gold, one active run, no catch-up, the one-slot pool on every task, and the backfill parameter accepts only dates: `python3 -m unittest discover -s airflow/tests` (needs `apache-airflow` installed) | Yes |
+| Shell scripts | `shellcheck scripts/*.sh` | Yes |
+| Compose files | `docker compose -f ... config -q` | Yes |
+| Each layer on the real stack | `hdfs-smoke.sh`, `spark-yarn-smoke.sh`, `kafka-smoke.sh`, `bronze-smoke.sh`, `silver-smoke.sh`, `gold-smoke.sh`, `airflow-smoke.sh`: reruns and replays change nothing, only new events are added, late and corrected events land in the right day, a backfill touches one day only, and each layer reconciles with the one below | No |
+
+The bronze, silver, gold and Airflow smoke tests start from an empty lake (they run `lake-reset.sh`), so do not run them against data you want to keep. Each one prints what it checked and exits non-zero on the first failure.
+
+**Not tested yet:** the silver and gold rules on their own, without the stack (they are only exercised through the smoke tests); the KPIs against an independent source (the checks compare each layer with the one below, not with the generator's own totals); killing a job mid-run (tried by hand when bronze was built, not scripted); Airflow task retries and failures; and speed at 100 times the volume. The stack is not started in CI (issue #20).
+
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
 each part is built; planned approach in italics.
