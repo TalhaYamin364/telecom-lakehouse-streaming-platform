@@ -57,11 +57,29 @@ done
 af dags list-import-errors 2>&1 | grep -q 'No data found' || fail "a DAG file has an import error"
 af pools get lake_writer 2> /dev/null | grep -qE 'lake_writer +\| 1 ' || fail "the lake_writer pool does not have exactly one slot"
 
+restore_normal_schedule() {  # pause the batch DAG and recreate Airflow without the test schedule
+  af dags pause lakehouse_batch > /dev/null 2>&1 || true
+  "${airflow_compose[@]}" up -d --wait airflow > /dev/null 2>&1 || true
+}
+test_schedule_active=false
+# On any exit before step 6 finishes, do not leave the two-minute test schedule submitting YARN jobs.
+trap '${test_schedule_active} && restore_normal_schedule' EXIT
+
 echo "2/7 a scheduled run builds bronze, silver and gold in order (the schedule is set to every 2 minutes for this test)"
+# lake-reset.sh deletes the warehouse under any running writer, so refuse to start unless both DAGs are idle.
+busy() { [ "$(count_state "$1" running)" -gt 0 ] || [ "$(count_state "$1" queued)" -gt 0 ]; }
+for dag in lakehouse_batch lakehouse_backfill; do
+  ! busy "${dag}" || fail "${dag} has a run in progress; let it finish, then rerun"
+done
+af dags pause lakehouse_batch > /dev/null 2>&1
+for dag in lakehouse_batch lakehouse_backfill; do
+  ! busy "${dag}" || fail "${dag} started a run while the test was starting; let it finish, then rerun"
+done
 scripts/lake-reset.sh > /dev/null
 total="$(generate 600 9301)"
 before="$(run_ids lakehouse_batch)"
 # Recreate Airflow with a short schedule so a run starts by itself; the DAG is unpaused only now.
+test_schedule_active=true
 LAKEHOUSE_SCHEDULE='*/2 * * * *' "${airflow_compose[@]}" up -d --wait airflow > /dev/null 2>&1
 af dags unpause lakehouse_batch > /dev/null 2>&1
 first="$(wait_for_new_run lakehouse_batch scheduled__ "${before}" 480)"; echo "${first}" | indent
@@ -117,8 +135,8 @@ fi
 
 echo "6/7 leave Airflow on its normal schedule, with the batch DAG paused (only once nothing is running)"
 wait_not_running lakehouse_batch 300
-af dags pause lakehouse_batch > /dev/null 2>&1
-"${airflow_compose[@]}" up -d --wait airflow > /dev/null 2>&1  # recreated without the test schedule; the paused state is kept
+restore_normal_schedule  # recreated without the test schedule; the paused state is kept
+test_schedule_active=false
 
 echo "7/7 the schedule in the DAG file is the normal one"
 grep -q '"\*/15 \* \* \* \*"' airflow/dags/lakehouse_batch.py || fail "the default schedule in lakehouse_batch.py is not every 15 minutes"
