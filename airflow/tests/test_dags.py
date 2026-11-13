@@ -25,7 +25,11 @@ class DagTest(unittest.TestCase):
 
     def test_batch_runs_bronze_then_silver_then_gold(self):
         dag = self.bag.dags["lakehouse_batch"]
-        self.assertEqual([t.task_id for t in dag.topological_sort()], ["bronze", "silver", "gold"])
+        tasks = {t.task_id: t for t in dag.tasks}
+        self.assertEqual(set(tasks), {"bronze", "silver", "gold"})
+        self.assertEqual(tasks["bronze"].downstream_task_ids, {"silver"})
+        self.assertEqual(tasks["silver"].downstream_task_ids, {"gold"})
+        self.assertEqual(tasks["gold"].downstream_task_ids, set())
 
     def test_batch_runs_one_at_a_time_without_catch_up(self):
         dag = self.bag.dags["lakehouse_batch"]
