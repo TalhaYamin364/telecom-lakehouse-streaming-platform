@@ -21,7 +21,11 @@ for run in json.load(sys.stdin):
 
 run_ids() { runs "$1" | cut -d' ' -f1; }  # run_ids <dag>
 
-count_state() { grep -c " $2\$" <<< "$(runs "$1")" || true; }  # count_state <dag> <state>
+count_state() {  # count_state <dag> <state>; fails, printing nothing, if the runs cannot be read
+  local out
+  out="$(runs "$1")" || return 1
+  grep -c " $2\$" <<< "${out}" || true
+}
 
 wait_for_new_run() {  # wait_for_new_run <dag> <run_id prefix> <run ids that already existed> <seconds>: a new such run succeeds
   local dag="$1" prefix="$2" before="$3" deadline=$((SECONDS + $4)) id state
@@ -41,9 +45,10 @@ wait_for_new_run() {  # wait_for_new_run <dag> <run_id prefix> <run ids that alr
 # Pausing a DAG also stops the scheduler from advancing runs already in flight, so the test never pauses to wait:
 # it waits for the running count to reach zero and only then pauses.
 wait_not_running() {  # wait_not_running <dag> <seconds>
-  local deadline=$((SECONDS + $2))
+  local deadline=$((SECONDS + $2)) n
   while (( SECONDS < deadline )); do
-    [ "$(count_state "$1" running)" -eq 0 ] && return 0
+    n="$(count_state "$1" running)" || fail "cannot read the runs of $1 from Airflow"
+    [ "${n}" -eq 0 ] && return 0
     sleep 3
   done
   fail "$1 still has a run in progress after $2 seconds"
@@ -57,17 +62,22 @@ done
 af dags list-import-errors 2>&1 | grep -q 'No data found' || fail "a DAG file has an import error"
 af pools get lake_writer 2> /dev/null | grep -qE 'lake_writer +\| 1 ' || fail "the lake_writer pool does not have exactly one slot"
 
-restore_normal_schedule() {  # pause the batch DAG and recreate Airflow without the test schedule
-  af dags pause lakehouse_batch > /dev/null 2>&1 || true
-  "${airflow_compose[@]}" up -d --wait airflow > /dev/null 2>&1 || true
+restore_normal_schedule() {  # pause the batch DAG and recreate Airflow without the test schedule; fails if either step fails
+  af dags pause lakehouse_batch > /dev/null 2>&1 \
+    && "${airflow_compose[@]}" up -d --wait airflow > /dev/null 2>&1
 }
 test_schedule_active=false
-# On any exit before step 6 finishes, do not leave the two-minute test schedule submitting YARN jobs.
-trap '${test_schedule_active} && restore_normal_schedule' EXIT
+# On any exit before step 6 finishes, do not leave the two-minute test schedule submitting YARN jobs (best effort here).
+trap '${test_schedule_active} && { restore_normal_schedule || echo "WARNING: could not restore the normal schedule; pause lakehouse_batch and recreate airflow" >&2; }' EXIT
 
 echo "2/7 a scheduled run builds bronze, silver and gold in order (the schedule is set to every 2 minutes for this test)"
 # lake-reset.sh deletes the warehouse under any running writer, so refuse to start unless both DAGs are idle.
-busy() { [ "$(count_state "$1" running)" -gt 0 ] || [ "$(count_state "$1" queued)" -gt 0 ]; }
+busy() {  # busy <dag>: true if the DAG has a running or queued run; aborts if Airflow cannot be read
+  local running queued
+  running="$(count_state "$1" running)" || fail "cannot read the runs of $1 from Airflow"
+  queued="$(count_state "$1" queued)" || fail "cannot read the runs of $1 from Airflow"
+  [ "${running}" -gt 0 ] || [ "${queued}" -gt 0 ]
+}
 for dag in lakehouse_batch lakehouse_backfill; do
   ! busy "${dag}" || fail "${dag} has a run in progress; let it finish, then rerun"
 done
@@ -98,9 +108,10 @@ af dags trigger lakehouse_batch > /dev/null 2>&1
 af dags trigger lakehouse_batch > /dev/null 2>&1
 deadline=$((SECONDS + 720)); most_running=0; manual_done=0
 while (( SECONDS < deadline )); do
-  running="$(count_state lakehouse_batch running)"
+  running="$(count_state lakehouse_batch running)" || fail "cannot read the runs of lakehouse_batch from Airflow"
   [ "${running}" -le "${most_running}" ] || most_running="${running}"
-  manual_done="$(runs lakehouse_batch | grep '^manual__' | grep ' success$' | cut -d' ' -f1 | grep -cvxF "${before}" || true)"
+  all_runs="$(runs lakehouse_batch)" || fail "cannot read the runs of lakehouse_batch from Airflow"
+  manual_done="$(grep '^manual__' <<< "${all_runs}" | grep ' success$' | cut -d' ' -f1 | grep -cvxF "${before}" || true)"
   [ "${manual_done}" -lt 2 ] || break
   sleep 3
 done
@@ -135,7 +146,7 @@ fi
 
 echo "6/7 leave Airflow on its normal schedule, with the batch DAG paused (only once nothing is running)"
 wait_not_running lakehouse_batch 300
-restore_normal_schedule  # recreated without the test schedule; the paused state is kept
+restore_normal_schedule || fail "could not pause lakehouse_batch and recreate airflow without the test schedule"  # the paused state is kept
 test_schedule_active=false
 
 echo "7/7 the schedule in the DAG file is the normal one"
