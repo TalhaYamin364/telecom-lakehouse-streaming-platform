@@ -7,35 +7,9 @@ set -euo pipefail
 
 # shellcheck source=/dev/null
 source "$(dirname "$0")/smoke-lib.sh"
-spark=(docker compose -f docker/compose.hadoop.yml --profile spark run --rm -T spark-client)
-
-# shellcheck disable=SC2016  # single-quoted on purpose: $(ls ...) must expand inside the container
-gold_check() {
-  "${spark[@]}" bash -c '/opt/spark/bin/spark-submit --master "local[1]" --jars "$(ls /opt/extra-jars/*.jar | paste -sd, -)" \
-    --driver-memory 768m /opt/spark_jobs/gold_check.py' 2>&1 | grep -E '^(SILVER|USAGE|REVENUE|CELL|DUPLICATE_KEYS|DAYS)'
-}
 
 gold() {  # run the gold job on YARN with the given arguments and print its one-line result
   scripts/spark-yarn.sh gold_daily.py "$@" 2>&1 | grep -E '^gold:|nothing to do' || fail "gold job failed (run scripts/spark-yarn.sh gold_daily.py to see why)"
-}
-
-computed_at() {  # computed_at <DAYS value> <day>: when that day was last computed
-  tr ',' '\n' <<< "$1" | sed -n "s/^$2://p"
-}
-
-reconcile() {  # reconcile <label> <report>: every gold total equals the same total over silver
-  local label="$1" report="$2" name
-  for name in ROWS CHARGE VOICE SMS BYTES CALLS TEXTS SESSIONS; do
-    expect "${label}" "USAGE_${name}" "$(value "USAGE_${name}" "${report}")" "$(value "SILVER_${name}" "${report}")"
-  done
-  expect "${label}" REVENUE_ROWS "$(value REVENUE_ROWS "${report}")" "$(value SILVER_ROWS "${report}")"
-  expect "${label}" REVENUE_CHARGE "$(value REVENUE_CHARGE "${report}")" "$(value SILVER_CHARGE "${report}")"
-  for name in ROWS CHARGE VOICE SMS BYTES; do
-    expect "${label}" "CELL_${name}" "$(value "CELL_${name}" "${report}")" "$(value "SILVER_${name}" "${report}")"
-  done
-  expect "${label}" DUPLICATE_KEYS "$(value DUPLICATE_KEYS "${report}")" 0
-  expect "${label}" TYPE_MISMATCH "$(value TYPE_MISMATCH "${report}")" 0
-  expect "${label}" SUBSCRIBER_MISMATCH "$(value SUBSCRIBER_MISMATCH "${report}")" 0
 }
 
 echo "1/8 start from an empty lake"

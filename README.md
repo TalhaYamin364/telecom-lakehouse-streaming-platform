@@ -20,10 +20,44 @@ silver layer.
 
 ```
 docker/        # compose files for HDFS, YARN, Kafka, Spark, Airflow
+airflow/dags/  # the Airflow DAGs
 generator/     # synthetic CDR event producer
 spark_jobs/    # streaming and batch jobs
 scripts/       # shell helpers (start, stop, backfill, health checks)
 ```
+
+## Operate the stack
+One script starts, stops and checks everything:
+
+```bash
+scripts/stack.sh start [--airflow]   # Hadoop, then Kafka (then Airflow), the cdr.raw topic, and wait until HDFS accepts writes
+scripts/stack.sh health              # read-only end-to-end check; exits non-zero and names what failed
+scripts/stack.sh status              # every container and whether it is healthy
+scripts/stack.sh stop [--volumes]    # stop everything; --volumes also deletes the data
+scripts/pipeline.sh                  # run bronze, then silver, then gold once, by hand
+scripts/backfill.sh 2026-01-01       # recompute gold for the given day(s); every other day is left alone
+```
+
+`stop` removes only this project's containers, so other containers on your machine (for example Supabase) are untouched. `health` checks that each container is healthy, HDFS is out of safe mode and has 2 live DataNodes, YARN has a running NodeManager, the `cdr.raw` topic exists, and (if running) that Airflow is healthy. It does not change any data. A stopped DataNode is caught by its container check; HDFS itself keeps counting it as live for about ten minutes.
+
+## Schedule it with Airflow
+Airflow 3.1.8 runs in a container built on the pinned Spark image, so a task runs `spark-submit` on YARN directly, with no Docker socket. Start it with `scripts/stack.sh start --airflow`; the UI is at http://localhost:8080, on loopback only, with no login, for local use.
+
+| DAG | Schedule | What it does |
+|---|---|---|
+| `lakehouse_batch` | every 15 minutes (set `LAKEHOUSE_SCHEDULE` to change it) | bronze (what is in Kafka now), then silver, then gold |
+| `lakehouse_backfill` | on demand | `gold_daily.py --day ...` for the days you give, for example `{"days": "2026-01-01,2026-01-02"}` |
+
+```bash
+docker compose -f docker/compose.hadoop.yml --profile spark --profile airflow exec airflow airflow dags unpause lakehouse_batch   # DAGs start paused
+scripts/airflow-smoke.sh   # about ten minutes, starts from an empty lake (runs lake-reset.sh)
+```
+
+**Safe to rerun and one writer at a time.** Every task runs the same idempotent job as the shell scripts, so a retry (each task retries twice) or a rerun reads the same input and reaches the same result. `lakehouse_batch` allows one active run, and every task in both DAGs uses the one-slot pool `lake_writer`, so two writers never overlap, even a backfill and a scheduled run. That is how the single-writer rule for silver and gold is enforced. The backfill DAG only accepts dates and commas, and Airflow rejects anything else before it reaches a command. Do not run `pipeline.sh` or `backfill.sh` by hand while an Airflow run is in progress.
+
+**Pausing.** In Airflow 3.1.8, pausing `lakehouse_batch` also stops runs that are already queued or running from advancing, so wait for the current run to finish before you pause. The smoke test does this, then leaves the batch DAG paused. It also ends with the normal 15-minute schedule restored, and it only counts runs it started itself.
+
+The smoke test checks, on the real stack: both DAGs load, with the one-slot pool; a run that Airflow starts by itself (the schedule is set to every two minutes for the test) builds bronze, silver and gold in that order and gold reconciles with silver; two runs triggered at once never overlap, both succeed, and nothing changes; the backfill DAG recomputes only the day it is given and leaves another day's compute time alone; and it refuses a parameter that is not a date.
 
 ## Run the Hadoop cluster
 One NameNode, two DataNodes (HDFS replication 2), a ResourceManager and a NodeManager.
@@ -154,7 +188,7 @@ The smoke test checks, on the real stack:
 
 A change marker from a silver run that has not finished is ignored; that was checked by hand (a marker dated after silver's last completed run), not in the smoke test.
 
-**One writer at a time.** Silver and gold each assume they are the only writer: do not run two silver jobs, two gold jobs, or a `--day` backfill alongside a normal gold run. Overlapping runs can leave gold stale, because the progress markers assume runs finish in order. The scheduler (Airflow, issue #12) is where that is enforced, with one active run per job and gold after silver.
+**One writer at a time.** Silver and gold each assume they are the only writer: do not run two silver jobs, two gold jobs, or a `--day` backfill alongside a normal gold run. Overlapping runs can leave gold stale, because the progress markers assume runs finish in order. Airflow enforces that (see "Schedule it with Airflow"): one active run and a one-slot pool, with gold after silver. Outside Airflow it is up to you.
 
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
@@ -178,6 +212,8 @@ Pinned for a MacBook (Apple Silicon, arm64) running Docker Engine 28.1.1 and Com
 | Spark | 4.0.5 | `apache/spark:4.0.5-scala2.13-java17-python3-ubuntu`, pinned by digest in `docker/spark/Dockerfile` | Yes |
 | Iceberg | 1.11.0 | `iceberg-spark-runtime-4.0_2.13`, sha256-pinned in `docker/spark/Dockerfile` | n/a (JVM jar) |
 | Spark Kafka connector | 4.0.5 | `spark-sql-kafka-0-10_2.13` and `spark-token-provider-kafka-0-10_2.13`, sha256-pinned | n/a (JVM jar) |
+| Airflow | 3.1.8 | PyPI, installed in a virtualenv on the Spark image with Airflow's own constraints file for that version and Python 3.10 (`docker/airflow/Dockerfile`) | Yes |
+| virtualenv | 20.26.6 | PyPI, pinned in `docker/airflow/Dockerfile` (the image's Python has no `ensurepip`) | Yes |
 | kafka-clients, commons-pool2 | 3.9.1, 2.12.0 | Maven Central, sha256-pinned; the versions Spark 4.0.5's connector depends on | n/a (JVM jar) |
 | Kafka | 4.3.2 | `apache/kafka:4.3.2`, pinned by digest in `docker/compose.kafka.yml` (KRaft mode; Java 21 inside the image) | Yes |
 | Python (generator) | 3.12.16 | `python:3.12-slim`, pinned by digest in `generator/Dockerfile` | Yes |
@@ -206,4 +242,4 @@ Hadoop cluster, Kafka events, bronze layer, silver and gold, orchestration and
 shell, reporting and performance, wrap-up.
 
 ## Status
-In build. Running and tested: HDFS and YARN, Spark on YARN, Kafka (KRaft), the CDR generator, the Kafka to Iceberg bronze layer, the silver layer (deduplicated, validated, masked) and the gold KPI tables with a one-day backfill. Next: shell scripts and Airflow, a dashboard, and performance work.
+In build. Running and tested: HDFS and YARN, Spark on YARN, Kafka (KRaft), the CDR generator, the Kafka to Iceberg bronze layer, the silver layer (deduplicated, validated, masked) and the gold KPI tables with a one-day backfill, operated by shell scripts and scheduled by Airflow. Next: a dashboard, and performance work.

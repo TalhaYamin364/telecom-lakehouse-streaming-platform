@@ -106,6 +106,40 @@ services:
       - ./hadoop/conf:/opt/hadoop-conf:ro
       - ../spark_jobs:/opt/spark_jobs:ro
 
+  # Scheduler for the batch jobs; run with `--profile airflow`. Local use only: the UI is on loopback with no login.
+  airflow:
+    build:
+      context: ./airflow
+      additional_contexts:
+        telecom-spark:4.0.5: service:spark-client
+    image: telecom-airflow:3.1.8
+    profiles: [airflow]
+    hostname: airflow
+    networks: [lakehouse]
+    command: ["/opt/airflow-start.sh"]
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      HADOOP_CONF_DIR: /opt/hadoop-conf
+      HADOOP_USER_NAME: hadoop
+      MSISDN_SALT:  # passed through from your shell if set; otherwise silver uses its local dev default
+      LAKEHOUSE_SCHEDULE: ${LAKEHOUSE_SCHEDULE:-*/15 * * * *}
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+    volumes:
+      - ./hadoop/conf:/opt/hadoop-conf:ro
+      - ../spark_jobs:/opt/spark_jobs:ro
+      - ../airflow/dags:/opt/airflow-dags:ro
+      - airflow-data:/opt/airflow-home
+    depends_on:
+      resourcemanager:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json, urllib.request; d = json.load(urllib.request.urlopen('http://localhost:8080/api/v2/monitor/health', timeout=4)); assert d and all(v['status'] == 'healthy' for v in d.values())"]
+      interval: 15s
+      timeout: 6s
+      retries: 20
+      start_period: 90s
+
 networks:
   lakehouse:
 
@@ -113,3 +147,4 @@ volumes:
   namenode-data:
   datanode1-data:
   datanode2-data:
+  airflow-data:

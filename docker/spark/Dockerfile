@@ -14,4 +14,5 @@ ADD --checksum=sha256:6d3bd18df8410f3e31b031aca582cc109342358a62a2759ebd0c4cdf30
 
 USER root
 RUN chmod -R a+rX /opt/extra-jars
+COPY --chmod=755 submit-job.sh /opt/submit-job.sh
 USER spark
