@@ -201,7 +201,7 @@ What is tested, and how. The first four run on every pull request; the smoke tes
 | Compose files | `docker compose -f ... config -q` | Yes |
 | Each layer on the real stack | `hdfs-smoke.sh`, `spark-yarn-smoke.sh`, `kafka-smoke.sh`, `bronze-smoke.sh`, `silver-smoke.sh`, `gold-smoke.sh`, `airflow-smoke.sh`: reruns and replays change nothing, only new events are added, late and corrected events land in the right day, a backfill touches one day only, and each layer reconciles with the one below | No |
 
-The bronze, silver, gold and Airflow smoke tests start from an empty lake (they run `lake-reset.sh`), so do not run them against data you want to keep. Each one prints what it checked and exits non-zero on the first failure.
+The silver, gold and Airflow smoke tests start from an empty lake (they run `lake-reset.sh`), so do not run them against data you want to keep. The bronze smoke test does not reset anything: it adds 1,500 events to the existing topic and checks bronze against the topic's total. Each test prints what it checked and exits non-zero on the first failure.
 
 **Not tested yet:** the silver and gold rules on their own, without the stack (they are only exercised through the smoke tests); the KPIs against an independent source (the checks compare each layer with the one below, not with the generator's own totals); killing a job mid-run (tried by hand when bronze was built, not scripted); Airflow task retries and failures; and speed at 100 times the volume. The stack is not started in CI (issue #20).
 
