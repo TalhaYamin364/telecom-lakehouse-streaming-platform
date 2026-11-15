@@ -191,11 +191,12 @@ A change marker from a silver run that has not finished is ignored; that was che
 **One writer at a time.** Silver and gold each assume they are the only writer: do not run two silver jobs, two gold jobs, or a `--day` backfill alongside a normal gold run. Overlapping runs can leave gold stale, because the progress markers assume runs finish in order. Airflow enforces that (see "Schedule it with Airflow"): one active run and a one-slot pool, with gold after silver. Outside Airflow it is up to you.
 
 ## Testing
-What is tested, and how. The first four run on every pull request; the smoke tests need the whole stack, so they run on a laptop.
+What is tested, and how. Everything marked "Yes" runs on every pull request; the smoke tests need the whole stack, so they run on a laptop.
 
 | What | How | In CI |
 |---|---|---|
 | Generator (events, duplicates, late copies, producer) | 32 unit tests, standard library only: `cd generator && python3 -m unittest` | Yes |
+| Silver rules and gold aggregations | 27 tests on small DataFrames in a local Spark session, with no HDFS, Kafka or Iceberg: every rejection reason and the order they apply in, masking and hashing, the latest copy winning, gold sums per event type, the midnight boundary, and the three gold tables agreeing on total charge: `python3 -m unittest discover -s spark_jobs/tests` (needs `pyspark` and Java 17; about 25 seconds) | Yes |
 | DAGs | 6 tests: both load, bronze then silver then gold, one active run, no catch-up, the one-slot pool on every task, and the backfill parameter accepts only dates: `python3 -m unittest discover -s airflow/tests` (needs `apache-airflow` installed) | Yes |
 | Shell scripts | `shellcheck scripts/*.sh` | Yes |
 | Compose files | `docker compose -f ... config -q` | Yes |
@@ -203,7 +204,7 @@ What is tested, and how. The first four run on every pull request; the smoke tes
 
 The silver, gold and Airflow smoke tests start from an empty lake (they run `lake-reset.sh`), so do not run them against data you want to keep. The bronze smoke test does not reset anything: it adds 1,500 events to the existing topic and checks bronze against the topic's total. Each test prints what it checked and exits non-zero on the first failure.
 
-**Not tested yet:** the silver and gold rules on their own, without the stack (they are only exercised through the smoke tests); the KPIs against an independent source (the checks compare each layer with the one below, not with the generator's own totals); killing a job mid-run (tried by hand when bronze was built, not scripted); Airflow task retries and failures; and speed at 100 times the volume. The stack is not started in CI (issue #20).
+**Not tested yet:** the Spark jobs' `main` functions and Iceberg writes on their own (the MERGE, the changed-days markers and the atomic overwrite are only exercised by the smoke tests); the KPIs against an independent source (the checks compare each layer with the one below, not with the generator's own totals); killing a job mid-run (tried by hand when bronze was built, not scripted); Airflow task retries and failures; and speed at 100 times the volume. The stack is not started in CI (issue #20).
 
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as

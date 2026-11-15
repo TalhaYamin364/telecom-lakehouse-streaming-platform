@@ -98,7 +98,10 @@ def rejection_reason(row):
 
 
 def parse(raw):
-    parsed = raw.withColumn("p", F.from_json("raw_value", SCHEMA))
+    # from_json turns malformed JSON into a struct of NULLs, which would be reported as "missing event_id", so a
+    # malformed record is made a NULL struct here to be reported as "invalid json".
+    parsed = raw.withColumn(
+        "p", F.when(F.expr("try_parse_json(raw_value) IS NOT NULL"), F.from_json("raw_value", SCHEMA)))
     flat = parsed.select("kafka_partition", "kafka_offset", "raw_value", "p", "p.*")
     # try_to_timestamp gives NULL for a bad value; Spark 4 would otherwise fail the whole job on it.
     flat = flat.withColumn("event_ts", F.expr("try_to_timestamp(event_time)")).withColumn("emitted_ts", F.expr("try_to_timestamp(emitted_at)"))
