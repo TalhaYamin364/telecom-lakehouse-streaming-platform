@@ -7,7 +7,7 @@ import hashlib
 import json
 import sys
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -21,6 +21,11 @@ import silver_cdr  # noqa: E402
 SALT = "test-salt"
 SUBSCRIBER = "+8801012345678"
 COUNTERPARTY = "+8801087654321"
+
+
+def utc(*parts):
+    """A moment in UTC. A naive datetime would be read in the local timezone of the machine running the tests."""
+    return datetime(*parts, tzinfo=timezone.utc)
 
 
 def record(**changes):
@@ -161,19 +166,21 @@ class SilverShapeTest(SparkCase):
 class LatestCopyTest(SparkCase):
     def latest(self, rows):
         df = self.spark.createDataFrame(rows, "event_id STRING, emitted_at TIMESTAMP, kafka_offset BIGINT, charge_paisa BIGINT")
-        return {r.event_id: r.charge_paisa for r in silver_cdr.latest_per_event(df).collect()}
+        found = silver_cdr.latest_per_event(df).collect()
+        self.assertEqual(len(found), len({r.event_id for r in found}), "more than one row left for an event_id")
+        return {r.event_id: r.charge_paisa for r in found}
 
     def test_the_later_emitted_copy_wins_whatever_the_arrival_order(self):
-        early, late = datetime(2026, 1, 1, 10), datetime(2026, 1, 1, 11)
+        early, late = utc(2026, 1, 1, 10), utc(2026, 1, 1, 11)
         self.assertEqual(self.latest([("a", early, 1, 100), ("a", late, 2, 150)]), {"a": 150})
         self.assertEqual(self.latest([("a", late, 1, 150), ("a", early, 2, 100)]), {"a": 150})
 
     def test_an_exact_resend_keeps_one_row(self):
-        moment = datetime(2026, 1, 1, 10)
+        moment = utc(2026, 1, 1, 10)
         self.assertEqual(self.latest([("a", moment, 1, 100), ("a", moment, 2, 100)]), {"a": 100})
 
     def test_different_events_are_kept_apart(self):
-        moment = datetime(2026, 1, 1, 10)
+        moment = utc(2026, 1, 1, 10)
         self.assertEqual(self.latest([("a", moment, 1, 100), ("b", moment, 2, 200)]), {"a": 100, "b": 200})
 
 
@@ -191,7 +198,7 @@ def silver_row(when, kind, who="h1", cell="C1", duration=None, segments=None, up
 
 
 class GoldAggregatesTest(SparkCase):
-    DAY1, DAY2 = datetime(2026, 1, 1, 10), datetime(2026, 1, 2, 10)
+    DAY1, DAY2 = utc(2026, 1, 1, 10), utc(2026, 1, 2, 10)
 
     def build(self, rows):
         frames = gold_daily.aggregates(self.spark.createDataFrame(rows, SILVER_SCHEMA))
@@ -230,8 +237,8 @@ class GoldAggregatesTest(SparkCase):
             self.assertEqual(day[column], 0, column)
 
     def test_events_fall_on_their_utc_day_at_the_midnight_boundary(self):
-        rows = [silver_row(datetime(2026, 1, 1, 23, 59, 59), "VOICE", duration=1),
-                silver_row(datetime(2026, 1, 2, 0, 0, 0), "VOICE", duration=2)]
+        rows = [silver_row(utc(2026, 1, 1, 23, 59, 59), "VOICE", duration=1),
+                silver_row(utc(2026, 1, 2, 0, 0, 0), "VOICE", duration=2)]
         by_day = {str(r["usage_date"]): r["voice_seconds"] for r in self.build(rows)[gold_daily.USAGE]}
         self.assertEqual(by_day, {"2026-01-01": 1, "2026-01-02": 2})
 
