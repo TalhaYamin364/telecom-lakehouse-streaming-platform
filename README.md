@@ -22,6 +22,7 @@ silver layer.
 docker/        # compose files for HDFS, YARN, Kafka, Spark, Airflow
 airflow/dags/  # the Airflow DAGs
 generator/     # synthetic CDR event producer
+oracle/        # expected gold KPIs worked out from the raw events, to check gold against
 spark_jobs/    # streaming and batch jobs
 scripts/       # shell helpers (start, stop, backfill, health checks)
 ```
@@ -200,11 +201,14 @@ What is tested, and how. Everything marked "Yes" runs on every pull request; the
 | DAGs | 6 tests: both load, bronze then silver then gold, one active run, no catch-up, the one-slot pool on every task, and the backfill parameter accepts only dates: `python3 -m unittest discover -s airflow/tests` (needs `apache-airflow` installed) | Yes |
 | Shell scripts | `shellcheck scripts/*.sh` | Yes |
 | Compose files | `docker compose -f ... config -q` | Yes |
+| Gold against the raw events (the oracle) | `oracle/oracle.py` works out the expected KPIs in plain Python from the messages in Kafka (valid records only, the latest copy of each event, UTC days, each metric over its own type) and `scripts/gold-oracle-smoke.sh` compares them with the gold tables per day, per event type and per cell. The other checks compare a layer with the one below it, so a rule misread in both layers passes them; this one does not. The oracle's own 18 unit tests run in CI: `python3 -m unittest discover -s oracle` | Unit tests yes; the stack comparison no |
 | Each layer on the real stack | `hdfs-smoke.sh`, `spark-yarn-smoke.sh`, `kafka-smoke.sh`, `bronze-smoke.sh`, `silver-smoke.sh`, `gold-smoke.sh`, `airflow-smoke.sh`: reruns and replays change nothing, only new events are added, late and corrected events land in the right day, a backfill touches one day only, and each layer reconciles with the one below | No |
 
-The silver, gold and Airflow smoke tests start from an empty lake (they run `lake-reset.sh`), so do not run them against data you want to keep. The bronze smoke test does not reset anything: it adds 1,500 events to the existing topic and checks bronze against the topic's total. Each test prints what it checked and exits non-zero on the first failure.
+The silver, gold, gold-oracle and Airflow smoke tests start from an empty lake (they run `lake-reset.sh`), so do not run them against data you want to keep. The bronze smoke test does not reset anything: it adds 1,500 events to the existing topic and checks bronze against the topic's total. Each test prints what it checked and exits non-zero on the first failure.
 
-**Not tested yet:** the Spark jobs' `main` functions and Iceberg writes on their own (the MERGE, the changed-days markers and the atomic overwrite are only exercised by the smoke tests); the KPIs against an independent source (the checks compare each layer with the one below, not with the generator's own totals); killing a job mid-run (tried by hand when bronze was built, not scripted); Airflow task retries and failures; and speed at 100 times the volume. The stack is not started in CI (issue #20).
+I checked that the oracle can fail: with silver changed so that the oldest copy of an event wins instead of the latest, the silver-to-gold reconciliation still passed, because both layers were wrong the same way, and the oracle reported 24 differences.
+
+**Not tested yet:** the Spark jobs' `main` functions and Iceberg writes on their own (the MERGE, the changed-days markers and the atomic overwrite are only exercised by the smoke tests); the oracle covers gold, not the quarantine table or the masking (the silver smoke test checks those); killing a job mid-run (tried by hand when bronze was built, not scripted); Airflow task retries and failures; and speed at 100 times the volume. The stack is not started in CI (issue #20).
 
 ## Design questions
 The questions every production pipeline has to answer. Answers are filled in as
