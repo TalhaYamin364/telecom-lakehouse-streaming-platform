@@ -80,7 +80,7 @@ class ExpectedTest(unittest.TestCase):
                                data(event_id="e4", duration_sec=999, sms_segments=9)])["days"]["2026-01-01"]
         self.assertEqual((day["voice_calls"], day["voice_seconds"]), (2, 90))
         self.assertEqual((day["sms_count"], day["sms_segments"]), (1, 2))
-        self.assertEqual((day["data_sessions"], day["data_bytes"]), (1, 6000))
+        self.assertEqual((day["data_sessions"], day["data_bytes_up"], day["data_bytes_down"]), (1, 1000, 5000))
         self.assertEqual((day["events"], day["charge_paisa"]), (4, 120 + 60 + 100 + 30))
 
     def test_days_are_utc_days_with_the_boundary_to_the_second(self):
@@ -142,6 +142,13 @@ class DifferencesTest(unittest.TestCase):
         found = oracle.differences(want, got)
         self.assertEqual(sorted(found), ["cells 2026-01-01|DHK-0001 data_bytes: expected 6000, gold has 0",
                                          "cells 2026-01-01|DHK-0002 data_bytes: expected 0, gold has 6000"])
+
+    def test_swapped_upload_and_download_totals_are_reported_even_though_their_sum_is_unchanged(self):
+        got = copy.deepcopy(self.want)
+        got["days"]["2026-01-02"]["data_bytes_up"], got["days"]["2026-01-02"]["data_bytes_down"] = 5000, 1000
+        self.assertEqual(sorted(oracle.differences(self.want, got)),
+                         ["days 2026-01-02 data_bytes_down: expected 5000, gold has 1000",
+                          "days 2026-01-02 data_bytes_up: expected 1000, gold has 5000"])
 
     def test_a_key_gold_holds_twice_is_reported(self):
         got = copy.deepcopy(self.want)

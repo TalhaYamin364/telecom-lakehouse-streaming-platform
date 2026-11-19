@@ -13,7 +13,7 @@ days = spark.table(USAGE).groupBy("usage_date").agg(
     F.sum("events").alias("events"), F.count("*").alias("subscribers"), F.sum("charge_paisa").alias("charge_paisa"),
     F.sum("voice_calls").alias("voice_calls"), F.sum("sms_count").alias("sms_count"), F.sum("data_sessions").alias("data_sessions"),
     F.sum("voice_seconds").alias("voice_seconds"), F.sum("sms_segments").alias("sms_segments"),
-    F.sum(F.col("data_bytes_up") + F.col("data_bytes_down")).alias("data_bytes"))
+    F.sum("data_bytes_up").alias("data_bytes_up"), F.sum("data_bytes_down").alias("data_bytes_down"))
 types = spark.table(REVENUE).select("usage_date", "event_type", "events", "charge_paisa")
 cells = spark.table(CELLS).select("usage_date", "cell_id", "events", "distinct_subscribers", "charge_paisa",
                                   "voice_seconds", "sms_segments", "data_bytes")

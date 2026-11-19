@@ -97,18 +97,22 @@ def expected(lines):
         d["charge_paisa"] += charge
         people[day].add(e["msisdn"])
         d[{"VOICE": "voice_calls", "SMS": "sms_count", "DATA": "data_sessions"}[kind]] += 1
-        volume = ({"voice_seconds": e["duration_sec"]} if kind == "VOICE" else
-                  {"sms_segments": e["sms_segments"]} if kind == "SMS" else
-                  {"data_bytes": e["bytes_up"] + e["bytes_down"]})
         t = types[(day, kind)]
         t["events"] += 1
         t["charge_paisa"] += charge
         c = cells[(day, e["cell_id"])]
         c["events"] += 1
         c["charge_paisa"] += charge
-        for name, amount in volume.items():
-            d[name] += amount
-            c[name] += amount
+        if kind == "VOICE":
+            d["voice_seconds"] += e["duration_sec"]
+            c["voice_seconds"] += e["duration_sec"]
+        elif kind == "SMS":
+            d["sms_segments"] += e["sms_segments"]
+            c["sms_segments"] += e["sms_segments"]
+        else:  # gold keeps upload and download apart per day and adds them per cell
+            d["data_bytes_up"] += e["bytes_up"]
+            d["data_bytes_down"] += e["bytes_down"]
+            c["data_bytes"] += e["bytes_up"] + e["bytes_down"]
         cell_people[(day, e["cell_id"])].add(e["msisdn"])
     for day, who in people.items():
         days[day]["subscribers"] = len(who)
@@ -123,7 +127,7 @@ def expected(lines):
 
 
 DAY_FIELDS = ("events", "subscribers", "charge_paisa", "voice_calls", "sms_count", "data_sessions",
-              "voice_seconds", "sms_segments", "data_bytes")
+              "voice_seconds", "sms_segments", "data_bytes_up", "data_bytes_down")
 
 
 def differences(want, got):
