@@ -50,6 +50,19 @@ gold_check() {  # reconcile gold with silver (spark_jobs/gold_check.py); prints 
     --driver-memory 768m /opt/spark_jobs/gold_check.py' 2>&1 | grep -E '^(SILVER|USAGE|REVENUE|CELL|DUPLICATE_KEYS|DAYS)'
 }
 
+# shellcheck disable=SC2016  # single-quoted on purpose: $(ls ...) must expand inside the container
+gold_dump() {  # gold_dump <file>: the gold tables as JSON, in the shape oracle/oracle.py compares with
+  local out
+  out="$("${spark[@]}" bash -c '/opt/spark/bin/spark-submit --master "local[1]" --jars "$(ls /opt/extra-jars/*.jar | paste -sd, -)" \
+    --driver-memory 768m /opt/spark_jobs/gold_dump.py' 2>&1 | grep '^GOLD_JSON=')" || fail "could not read the gold tables"
+  printf '%s\n' "${out#GOLD_JSON=}" > "$1"
+}
+
+read_topic() {  # read_topic <file>: every message in cdr.raw, one per line
+  "${kafka[@]}" exec -T kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:19092 --topic cdr.raw \
+    --from-beginning --timeout-ms 10000 2> /dev/null > "$1" || true
+}
+
 computed_at() {  # computed_at <DAYS value> <day>: when that day was last computed
   tr ',' '\n' <<< "$1" | sed -n "s/^$2://p"
 }
