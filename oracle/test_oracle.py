@@ -46,6 +46,10 @@ class ValidityTest(unittest.TestCase):
     def test_a_stray_metric_on_another_type_does_not_make_a_record_invalid(self):
         self.assertEqual(len(oracle.latest_copies([data(duration_sec=999, sms_segments=9)])[0]), 1)
 
+    def test_a_complete_json_object_followed_by_text_is_kept_but_a_truncated_one_is_not(self):
+        self.assertEqual(oracle.latest_copies([voice() + " trailing text", voice(event_id="e2") + "}{"])[1], 0)
+        self.assertEqual(oracle.latest_copies([voice()[:-1]])[1], 1)
+
     def test_blank_lines_are_not_counted_as_dropped(self):
         self.assertEqual(oracle.latest_copies(["", "  ", voice()])[1], 0)
 
@@ -124,6 +128,25 @@ class DifferencesTest(unittest.TestCase):
         self.assertEqual(len(found), 2)
         self.assertIn("gold has no row", found[0] + found[1])
         self.assertIn("do not explain", found[0] + found[1])
+
+    def test_cell_volumes_are_expected_per_cell_and_a_volume_in_the_wrong_cell_is_reported(self):
+        want = oracle.expected([voice(event_id="a", cell_id="DHK-0001"), sms(event_id="b", cell_id="DHK-0002"),
+                                data(event_id="c", cell_id="DHK-0001"), voice(event_id="d", event_time="2026-01-02T09:00:00.000Z",
+                                                                              emitted_at="2026-01-02T09:00:01.000Z")])
+        self.assertEqual({k: want["cells"]["2026-01-01|DHK-0001"][k] for k in ("voice_seconds", "data_bytes")},
+                         {"voice_seconds": 60, "data_bytes": 6000})
+        self.assertEqual(want["cells"]["2026-01-01|DHK-0002"]["sms_segments"], 2)
+        got = copy.deepcopy(want)
+        got["cells"]["2026-01-01|DHK-0001"]["data_bytes"] = 0  # the daily total could still be right in another cell
+        got["cells"]["2026-01-01|DHK-0002"]["data_bytes"] = 6000
+        found = oracle.differences(want, got)
+        self.assertEqual(sorted(found), ["cells 2026-01-01|DHK-0001 data_bytes: expected 6000, gold has 0",
+                                         "cells 2026-01-01|DHK-0002 data_bytes: expected 0, gold has 6000"])
+
+    def test_a_key_gold_holds_twice_is_reported(self):
+        got = copy.deepcopy(self.want)
+        got["duplicate_keys"] = ["cell_traffic 2026-01-01|DHK-0001"]
+        self.assertEqual(oracle.differences(self.want, got), ["gold holds more than one row for cell_traffic 2026-01-01|DHK-0001"])
 
     def test_a_zero_gold_leaves_out_or_writes_as_zero_agrees_but_a_missing_nonzero_does_not(self):
         got = copy.deepcopy(self.want)

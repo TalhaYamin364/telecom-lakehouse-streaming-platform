@@ -107,6 +107,10 @@ class SilverRulesTest(SparkCase):
     def test_an_empty_json_object_is_missing_its_event_id(self):
         self.assertEqual(self.reasons("{}"), ["missing event_id"])
 
+    def test_text_after_a_complete_json_object_is_ignored_but_a_truncated_object_is_rejected(self):
+        self.assertEqual(self.reasons(record() + " trailing text", record(event_id="e2") + "}{"), [None, None])
+        self.assertEqual(self.reasons(record()[:-1], '{"event_id": "e3", "event_type"'), ["invalid json", "invalid json"])
+
     def test_an_empty_event_id_and_a_phone_number_in_cell_id_are_rejected(self):
         self.assertEqual(self.reasons(record(event_id="")), ["missing event_id"])
         self.assertEqual(self.reasons(record(cell_id="x+8801012345678y")), ["phone number in event_id or cell_id"])

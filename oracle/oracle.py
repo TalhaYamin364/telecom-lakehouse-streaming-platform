@@ -37,7 +37,7 @@ def whole(value):
 def parse_valid(line):
     """The record as a dict with parsed times, or None if the record breaks a rule."""
     try:
-        r = json.loads(line)
+        r, _ = json.JSONDecoder().raw_decode(line.lstrip())  # text after a complete JSON object is ignored, as in silver
         if not isinstance(r, dict):
             return None
         event_id, kind, cell = r.get("event_id"), r.get("event_type"), r.get("cell_id")
@@ -97,18 +97,18 @@ def expected(lines):
         d["charge_paisa"] += charge
         people[day].add(e["msisdn"])
         d[{"VOICE": "voice_calls", "SMS": "sms_count", "DATA": "data_sessions"}[kind]] += 1
-        if kind == "VOICE":
-            d["voice_seconds"] += e["duration_sec"]
-        elif kind == "SMS":
-            d["sms_segments"] += e["sms_segments"]
-        else:
-            d["data_bytes"] += e["bytes_up"] + e["bytes_down"]
+        volume = ({"voice_seconds": e["duration_sec"]} if kind == "VOICE" else
+                  {"sms_segments": e["sms_segments"]} if kind == "SMS" else
+                  {"data_bytes": e["bytes_up"] + e["bytes_down"]})
         t = types[(day, kind)]
         t["events"] += 1
         t["charge_paisa"] += charge
         c = cells[(day, e["cell_id"])]
         c["events"] += 1
         c["charge_paisa"] += charge
+        for name, amount in volume.items():
+            d[name] += amount
+            c[name] += amount
         cell_people[(day, e["cell_id"])].add(e["msisdn"])
     for day, who in people.items():
         days[day]["subscribers"] = len(who)
@@ -128,9 +128,9 @@ DAY_FIELDS = ("events", "subscribers", "charge_paisa", "voice_calls", "sms_count
 
 def differences(want, got):
     """A list of plain-English differences between the expected KPIs and the gold dump; empty if they agree."""
-    found = []
+    found = [f"gold holds more than one row for {key}" for key in got.get("duplicate_keys", [])]
     for section, fields in (("days", DAY_FIELDS), ("types", ("events", "charge_paisa")),
-                            ("cells", ("events", "distinct_subscribers", "charge_paisa"))):
+                            ("cells", ("events", "distinct_subscribers", "charge_paisa", "voice_seconds", "sms_segments", "data_bytes"))):
         for key in sorted(set(want[section]) | set(got[section])):
             if key not in got[section]:
                 found.append(f"{section} {key}: gold has no row, expected {want[section][key]}")

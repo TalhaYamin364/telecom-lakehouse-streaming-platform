@@ -15,13 +15,24 @@ days = spark.table(USAGE).groupBy("usage_date").agg(
     F.sum("voice_seconds").alias("voice_seconds"), F.sum("sms_segments").alias("sms_segments"),
     F.sum(F.col("data_bytes_up") + F.col("data_bytes_down")).alias("data_bytes"))
 types = spark.table(REVENUE).select("usage_date", "event_type", "events", "charge_paisa")
-cells = spark.table(CELLS).select("usage_date", "cell_id", "events", "distinct_subscribers", "charge_paisa")
+cells = spark.table(CELLS).select("usage_date", "cell_id", "events", "distinct_subscribers", "charge_paisa",
+                                  "voice_seconds", "sms_segments", "data_bytes")
 
 
-def rows(df, *key):
-    return {"|".join(str(r[k]) for k in key): {c: r[c] for c in df.columns if c not in key} for r in df.collect()}
+def rows(label, df, *key):
+    """The rows by key, and the keys that occur more than once, which a dict would silently overwrite."""
+    found, duplicates = {}, []
+    for r in df.collect():
+        name = "|".join(str(r[k]) for k in key)
+        if name in found:
+            duplicates.append(f"{label} {name}")
+        found[name] = {c: r[c] for c in df.columns if c not in key}
+    return found, duplicates
 
 
+days_rows, days_dups = rows("daily_usage_per_subscriber", days, "usage_date")
+types_rows, types_dups = rows("revenue_by_event_type", types, "usage_date", "event_type")
+cells_rows, cells_dups = rows("cell_traffic", cells, "usage_date", "cell_id")
 print("GOLD_JSON=" + json.dumps({
-    "days": rows(days, "usage_date"), "types": rows(types, "usage_date", "event_type"), "cells": rows(cells, "usage_date", "cell_id"),
+    "days": days_rows, "types": types_rows, "cells": cells_rows, "duplicate_keys": days_dups + types_dups + cells_dups,
 }))

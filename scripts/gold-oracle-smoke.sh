@@ -16,9 +16,10 @@ trap 'rm -rf "${work}"' EXIT
 echo "1/4 start from an empty lake"
 scripts/lake-reset.sh > /dev/null
 
-echo "2/4 generate 1000 events plus a stray-field event, a later correction that moves an event to another day, and a negative-charge record"
+echo "2/4 generate 1000 events plus a stray-field event, one followed by trailing text, a later correction that moves an event to another day, and two bad records"
 total="$(generate 1000 8601)"
 produce_raw '{"event_id":"stray-fields","event_type":"DATA","msisdn":"+8801000000004","cell_id":"DHK-0001","event_time":"2026-01-01T00:00:20.000Z","emitted_at":"2026-01-01T00:00:21.000Z","duration_sec":60,"sms_segments":9,"bytes_up":5,"bytes_down":6,"charge_paisa":7}'
+produce_raw '{"event_id":"trailing-text","event_type":"DATA","msisdn":"+8801000000007","cell_id":"DHK-0003","event_time":"2026-01-01T00:00:30.000Z","emitted_at":"2026-01-01T00:00:31.000Z","bytes_up":3,"bytes_down":4,"charge_paisa":8} trailing text'
 fix_time_original
 fix_time_correction
 produce_raw '{"event_id":"negative-charge","event_type":"SMS","msisdn":"+8801000000005","counterparty_msisdn":"+8801000000006","cell_id":"DHK-0002","event_time":"2026-01-01T00:00:40.000Z","emitted_at":"2026-01-01T00:00:41.000Z","sms_segments":1,"charge_paisa":-50}'
